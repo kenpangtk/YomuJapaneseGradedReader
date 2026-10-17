@@ -7,6 +7,9 @@ public/vendor
 .vite
 coverage
 
+# Session handoff notes
+HANDOFF.md
+
 # Local secrets and credentials — never commit API keys
 .env
 .env.*
