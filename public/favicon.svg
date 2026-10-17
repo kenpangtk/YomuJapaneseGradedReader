@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Yomu">
+  <rect width="64" height="64" rx="16" fill="#a8422c"/>
+  <path d="M17 19h30v27H17z" fill="none" stroke="#fffaf4" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M22 26h20M22 33h20M22 40h12" stroke="#fffaf4" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="44" cy="43" r="6" fill="#f3dfd6"/>
+</svg>

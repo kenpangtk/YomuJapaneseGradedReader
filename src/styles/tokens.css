@@ -1,0 +1,88 @@
+:root {
+  --paper: #f4efe6;
+  --paper-deep: #ece4d7;
+  --surface: #fffdf8;
+  --surface-soft: #f9f5ed;
+  --surface-strong: #f0e8db;
+  --ink: #26221c;
+  --ink-soft: #5e574d;
+  --ink-faint: #857c70;
+  --line: #ded4c5;
+  --line-strong: #c9bcaa;
+  --accent: #a8422c;
+  --accent-strong: #87311f;
+  --accent-soft: #f3dfd6;
+  --accent-ink: #fffaf4;
+  --moss: #5b6d58;
+  --moss-soft: #e3e9df;
+  --gold: #a7792e;
+  --gold-soft: #f3e8d1;
+  --danger: #9c352f;
+  --danger-soft: #f5dedb;
+  --success: #3f6950;
+  --success-soft: #dfebe1;
+  --focus: #1f5f9f;
+  --focus-soft: #dceaf7;
+  --shadow-sm: 0 1px 2px rgb(61 45 25 / 7%), 0 4px 14px rgb(61 45 25 / 5%);
+  --shadow-md: 0 10px 34px rgb(51 37 20 / 12%), 0 2px 6px rgb(51 37 20 / 6%);
+  --shadow-lg: 0 24px 70px rgb(36 26 14 / 24%);
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 22px;
+  --font-ui: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+  --font-jp: 'Hiragino Mincho ProN', 'Yu Mincho', 'YuMincho', 'Noto Serif JP', 'Times New Roman', serif;
+  --reader-scale: 1;
+  --reader-size: calc(1.34rem * var(--reader-scale));
+  --reading-width: 42em;
+  --header-height: 68px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #171613;
+    --paper-deep: #100f0d;
+    --surface: #211f1b;
+    --surface-soft: #1c1a17;
+    --surface-strong: #2c2823;
+    --ink: #f0e8dc;
+    --ink-soft: #b9afa1;
+    --ink-faint: #918678;
+    --line: #39342d;
+    --line-strong: #51493e;
+    --accent: #df7a5d;
+    --accent-strong: #f3967a;
+    --accent-soft: #3b241d;
+    --accent-ink: #21140f;
+    --moss: #9db397;
+    --moss-soft: #263127;
+    --gold: #dcb66f;
+    --gold-soft: #332a1c;
+    --danger: #e58d84;
+    --danger-soft: #3a211f;
+    --success: #9bc6a9;
+    --success-soft: #203027;
+    --focus: #8fc5f5;
+    --focus-soft: #1c3042;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 20%), 0 4px 14px rgb(0 0 0 / 15%);
+    --shadow-md: 0 10px 34px rgb(0 0 0 / 35%), 0 2px 6px rgb(0 0 0 / 20%);
+    --shadow-lg: 0 24px 70px rgb(0 0 0 / 55%);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --line: #8a7c68;
+    --line-strong: #4f463a;
+    --ink-soft: #3b342c;
+    --ink-faint: #4b4339;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --line: #b3a792;
+      --line-strong: #ded3c1;
+      --ink-soft: #e3dacd;
+      --ink-faint: #d4c9ba;
+    }
+  }
+}
