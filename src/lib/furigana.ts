@@ -88,6 +88,17 @@ export function buildFurigana(surface: string, reading: string): FuriganaSegment
   return segments;
 }
 
+/**
+ * Chinese pinyin ruby is word-level: a token containing hanzi gets its whole
+ * tone-marked pinyin reading as ruby. Non-hanzi tokens stay plain text.
+ */
+export function buildPinyinFurigana(surface: string, reading: string): FuriganaSegment[] {
+  if (!surface || !reading || ![...surface].some(isKanji)) {
+    return [{ text: surface }];
+  }
+  return [{ text: surface, ruby: reading }];
+}
+
 export function plainTextFromSegments(segments: FuriganaSegment[]): string {
   return segments.map((segment) => segment.text).join('');
 }

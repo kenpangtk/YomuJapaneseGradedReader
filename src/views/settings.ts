@@ -3,30 +3,34 @@ import {
   clearAllData,
   clearApiKey,
   createExportBundle,
-  getApiKey,
+  getApiKeySource,
   importBundle,
   listGenerationLogs,
   saveProfile,
   saveSettings,
   setApiKey,
 } from '../db';
-import { baseNewWordCap, levelSummary } from '../lib/level';
+import { baseNewWordCap, lengthRange, levelSummary } from '../lib/level';
+import { switchLanguage } from '../lib/language';
+import { defaultLanguageState, levelSystemLabel, pronunciationLabel } from '../lib/languageDefaults';
+import { levelSamples } from '../content/levelSamples';
+import { optOutOfSharedProvider } from '../lib/sharedConfig';
 import { downloadJson, parseImport } from '../lib/exportImport';
 import { formatDateTime } from '../lib/date';
 import { INTERESTS, INTEREST_LABELS } from '../content/levelLists';
 import { testProviderConnection } from '../generation/pipeline';
-import type { FuriganaMode, ProviderKind, StoryLength } from '../types';
-import { FURIGANA_LABELS, STORY_LENGTH_LABELS } from '../types';
+import type { FuriganaMode, Language, ProviderKind, StoryLength } from '../types';
+import { LANGUAGE_LABELS, FURIGANA_LABELS, STORY_LENGTH_LABELS } from '../types';
 import { button, el } from '../ui/dom';
 import { openModal } from '../ui/modal';
 import { showError, showToast } from '../ui/toast';
 
-const FURIGANA_MODES: FuriganaMode[] = ['off', 'always', 'hover', 'learn'];
+const FURIGANA_MODES: FuriganaMode[] = ['off', 'always', 'hover', 'click', 'learn'];
 const LENGTHS: StoryLength[] = ['short', 'medium', 'long'];
-const BASE_LEVELS = Array.from({ length: 17 }, (_, index) => 1 + index * 0.25);
+const LANGUAGES: Language[] = ['ja', 'zh'];
 
-function levelOptions(current: number): number[] {
-  const set = new Set<number>(BASE_LEVELS);
+function levelOptions(language: Language, current: number): number[] {
+  const set = new Set<number>(levelSamples(language).map((sample) => sample.level));
   set.add(Math.round(current * 1000) / 1000);
   return [...set].sort((left, right) => left - right);
 }
@@ -34,10 +38,13 @@ function levelOptions(current: number): number[] {
 export async function renderSettings(root: HTMLElement, context: AppContext): Promise<void> {
   const settings = context.settings;
   const profile = context.profile;
+  const language = profile.language;
+  const pronunciation = pronunciationLabel(language);
   const recentLogs = await listGenerationLogs(4);
-  const savedKey = getApiKey();
+  const keySource = getApiKeySource();
+  const savedKey = keySource === 'saved';
   let level = profile.level;
-  let furigana = settings.furiganaDefault;
+  let furigana = profile.furiganaMode;
   let translations = settings.translationsDefault;
   let textSize = settings.textSize;
   let storyLength = profile.storyLength;
@@ -49,31 +56,49 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
   const providerStatus = el('div', { className: 'hint', id: 'provider-status' });
 
   const updateProviderStatus = (): void => {
-    const key = getApiKey();
+    const source = getApiKeySource();
+    const keyLabel =
+      source === 'shared' ? 'shared server key' : source === 'saved' ? 'API key stored' : 'no API key stored';
     providerStatus.textContent =
       provider === 'mock'
         ? 'Active provider: Offline mock. New stories will not use the network.'
-        : `Active provider: ${model.trim() || 'no model set'} @ ${baseUrl.trim() || 'no base URL'} · ${key ? 'API key stored' : 'no API key stored'}`;
+        : `Active provider: ${model.trim() || 'no model set'} @ ${baseUrl.trim() || 'no base URL'} · ${keyLabel}`;
   };
 
-  const savePreferences = async (): Promise<void> => {
-    const levelChanged = Math.abs(level - profile.level) > 0.0001;
+  const savePreferences = async (notify = true): Promise<void> => {
+    const current = context.profile;
+    const levelChanged = Math.abs(level - current.level) > 0.0001;
+    const hardness = levelChanged ? 0 : current.hardness;
+    const consecutiveHard = levelChanged ? 0 : current.consecutiveHard;
+    const consecutiveEasy = levelChanged ? 0 : current.consecutiveEasy;
+    const newWordCap = levelChanged ? baseNewWordCap(level, language) : current.newWordCap;
     const nextProfile = {
-      ...profile,
+      ...current,
       level,
       furiganaMode: furigana,
       translationsDefault: translations,
       storyLength,
       interests,
-      hardness: levelChanged ? 0 : profile.hardness,
-      consecutiveHard: levelChanged ? 0 : profile.consecutiveHard,
-      consecutiveEasy: levelChanged ? 0 : profile.consecutiveEasy,
-      newWordCap: levelChanged ? baseNewWordCap(level) : profile.newWordCap,
+      hardness,
+      consecutiveHard,
+      consecutiveEasy,
+      newWordCap,
+      savedLevels: {
+        ...current.savedLevels,
+        [language]: {
+          level,
+          hardness,
+          consecutiveHard,
+          consecutiveEasy,
+          newWordCap,
+          furiganaMode: furigana,
+        },
+      },
       updatedAt: Date.now(),
     };
     await saveProfile(nextProfile);
     const nextSettings = {
-      ...settings,
+      ...context.settings,
       furiganaDefault: furigana,
       translationsDefault: translations,
       textSize,
@@ -83,10 +108,21 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     context.profile = nextProfile;
     context.settings = nextSettings;
     document.documentElement.style.setProperty('--reader-scale', String(textSize / 100));
-    showToast(levelChanged ? `Level set to ${levelSummary(level)}. Adaptation history reset.` : 'Reading preferences saved.');
+    if (notify) {
+      showToast(levelChanged ? `Level set to ${levelSummary(level, language)}. Adaptation history reset.` : 'Reading preferences saved.');
+    }
+  };
+
+  const changeLanguage = async (next: Language): Promise<void> => {
+    if (next === language) return;
+    await savePreferences(false);
+    context.profile = await switchLanguage(next);
+    await context.refresh();
+    showToast(`Learning language set to ${LANGUAGE_LABELS[next]}.`);
   };
 
   const saveProvider = async (notify = true, clearKeyInput = true): Promise<boolean> => {
+    optOutOfSharedProvider();
     if (provider === 'openai') {
       if (!baseUrl.trim() || !model.trim()) {
         if (notify) showToast('Enter an endpoint and model for the provider.');
@@ -152,7 +188,7 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     type: 'password',
     autocomplete: 'off',
     spellcheck: 'false',
-    placeholder: savedKey ? '•••••••• saved locally' : 'sk-…',
+    placeholder: keySource === 'saved' ? '•••••••• saved locally' : keySource === 'shared' ? 'Using shared server key' : 'sk-…',
     'aria-label': 'Provider API key',
     on: {
       input: (event) => {
@@ -163,24 +199,32 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     },
   });
 
+  const lengthHint = el('span', { className: 'hint' });
+  const updateLengthHint = (): void => {
+    const range = lengthRange(level, storyLength, language);
+    const lengthName = storyLength.charAt(0).toUpperCase() + storyLength.slice(1);
+    lengthHint.textContent = `${lengthName} at ${levelSummary(level, language)}: about ${range.min}–${range.max} characters.`;
+  };
+
   const levelSelect = el('select', {
     className: 'select',
-    'aria-label': 'Reading level',
+    'aria-label': `${levelSystemLabel(language)} reading level`,
     on: {
       change: (event) => {
         level = Number((event.target as HTMLSelectElement).value);
-        levelReadout.textContent = `${levelSummary(level)} · ${level.toFixed(2)}`;
+        levelReadout.textContent = `${levelSummary(level, language)} · ${level.toFixed(2)}`;
+        updateLengthHint();
       },
     },
-  }, levelOptions(profile.level).map((value) =>
-    el('option', { value: String(value), selected: Math.abs(value - level) < 0.001 }, `${levelSummary(value)} · ${value.toFixed(2)}`),
+  }, levelOptions(language, profile.level).map((value) =>
+    el('option', { value: String(value), selected: Math.abs(value - level) < 0.001 }, `${levelSummary(value, language)} · ${value.toFixed(2)}`),
   ));
-  const levelReadout = el('span', { className: 'badge badge-outline', text: `${levelSummary(level)} · ${level.toFixed(2)}` });
+  const levelReadout = el('span', { className: 'badge badge-outline', text: `${levelSummary(level, language)} · ${level.toFixed(2)}` });
 
   const furiganaButtons = FURIGANA_MODES.map((mode) =>
     el('button', {
       type: 'button',
-      'aria-pressed': furigana === mode,
+      'aria-pressed': furigana === mode ? 'true' : 'false',
       text: FURIGANA_LABELS[mode],
       on: {
         click: () => {
@@ -196,9 +240,11 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     on: {
       change: (event) => {
         storyLength = (event.target as HTMLSelectElement).value as StoryLength;
+        updateLengthHint();
       },
     },
   }, LENGTHS.map((choice) => el('option', { value: choice, selected: choice === storyLength }, STORY_LENGTH_LABELS[choice])));
+  updateLengthHint();
 
   const textSizeInput = el('input', {
     className: 'input',
@@ -241,6 +287,7 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     on: {
       change: (event) => {
         provider = (event.target as HTMLSelectElement).value as ProviderKind;
+        optOutOfSharedProvider();
         providerFields.hidden = provider === 'mock';
         void persistProviderDraft();
       },
@@ -259,6 +306,7 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     on: {
       input: (event) => {
         baseUrl = (event.target as HTMLInputElement).value;
+        optOutOfSharedProvider();
         void persistProviderDraft();
       },
     },
@@ -273,6 +321,7 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     on: {
       input: (event) => {
         model = (event.target as HTMLInputElement).value;
+        optOutOfSharedProvider();
         void persistProviderDraft();
       },
     },
@@ -299,17 +348,36 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
               variant: 'quiet',
               onClick: () => {
                 clearApiKey();
+                optOutOfSharedProvider();
+                provider = 'mock';
+                providerSelect.value = 'mock';
+                providerFields.hidden = true;
+                void persistProviderDraft();
                 keyInput.placeholder = 'sk-…';
-                showToast('API key removed from this browser.');
+                updateProviderStatus();
+                showToast('API key removed. Switched to the offline mock provider.');
               },
             })
           : null,
       ]),
-      el('span', { className: 'hint', text: savedKey ? 'A key is saved in localStorage. It is never shown in full, exported, or logged.' : 'Stored in localStorage only. Never exported or logged.' }),
+      el('span', {
+        className: 'hint',
+        text:
+          keySource === 'shared'
+            ? 'Using the shared provider key supplied with this app. Anyone who can load this page can extract it; use only on a trusted network.'
+            : savedKey
+              ? 'A key is saved in localStorage. It is never shown in full, exported, or logged.'
+              : 'Stored in localStorage only. Never exported or logged.',
+      }),
     ]),
     el('div', { className: 'notice notice-warn' }, [
       el('span', { 'aria-hidden': 'true', text: '!' }),
-      el('span', { text: 'Browser-held keys are visible to any script on this origin. Use a scoped key and avoid untrusted scripts. The endpoint must allow browser CORS for POST /chat/completions; a provider that cannot allow CORS needs a thin proxy. A proxy is also required before public distribution.' }),
+      el('span', {
+        text:
+          keySource === 'shared'
+            ? 'This app is using a shared provider key supplied by the server. Anyone who can load the page can extract the key. Use only on a trusted Wi-Fi network and use a scoped key with a spending limit.'
+            : 'Browser-held keys are visible to any script on this origin. Use a scoped key and avoid untrusted scripts. The endpoint must allow browser CORS for POST /chat/completions; a provider that cannot allow CORS needs a thin proxy. A proxy is also required before public distribution.',
+      }),
     ]),
     el('div', { className: 'row' }, [
       button('Save provider', { variant: 'secondary', onClick: () => { void saveProvider(); } }),
@@ -335,7 +403,7 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
           const modal = openModal({
             title: 'Import Yomu data',
             body: el('div', {}, [
-              el('p', { text: 'Review what will be merged. Newer feedback wins; words are deduplicated by dictionary form and reading; stories are deduplicated by ID.' }),
+              el('p', { text: 'Review what will be merged. Newer feedback wins; words are deduplicated within each language by dictionary form and reading; stories are deduplicated by ID.' }),
               el('div', { className: 'import-preview' }, [
                 el('span', { text: `${counts.words} words` }),
                 el('span', { text: `${counts.stories} stories` }),
@@ -418,29 +486,63 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
     ]),
     el('div', { className: 'settings-grid' }, [
       el('nav', { className: 'settings-nav', 'aria-label': 'Settings sections' }, [
+        el('a', { href: '#language', text: 'Language' }),
         el('a', { href: '#reading', text: 'Reading' }),
         el('a', { href: '#provider', text: 'Provider' }),
         el('a', { href: '#data', text: 'Data' }),
         el('a', { href: '#about', text: 'About' }),
       ]),
       el('div', {}, [
+        el('section', { id: 'language', className: 'settings-section card' }, [
+          el('h2', { text: 'Learning language' }),
+          el('p', { className: 'muted small', text: 'Japanese and Chinese keep separate levels, pronunciation settings, and adaptation history.' }),
+          el('div', { className: 'language-choice', role: 'group', 'aria-label': 'Learning language' },
+            LANGUAGES.map((code) => {
+              const active = profile.language === code;
+              const saved = profile.savedLevels[code] ?? defaultLanguageState(code);
+              return el('button', {
+                type: 'button',
+                className: 'language-choice-option',
+                'aria-pressed': active ? 'true' : 'false',
+                on: {
+                  click: () => {
+                    if (!active) void changeLanguage(code);
+                  },
+                },
+              }, [
+                el('span', { className: 'language-choice-native', text: code === 'zh' ? '中文' : '日本語' }),
+                el('span', { className: 'language-choice-name', text: LANGUAGE_LABELS[code] }),
+                el('span', { className: 'language-choice-system', text: `${levelSystemLabel(code)} · ${levelSummary(active ? level : saved.level, code)}` }),
+              ]);
+            }),
+          ),
+          el('span', { className: 'hint', text: 'Switching loads the saved level and pronunciation setting for that language.' }),
+        ]),
         el('section', { id: 'reading', className: 'settings-section card' }, [
           el('h2', { text: 'Reading' }),
           el('div', { className: 'stack' }, [
             el('div', { className: 'field-row' }, [
               el('div', { className: 'field' }, [
-                el('label', { text: 'Current level' }),
+                el('label', { text: `${levelSystemLabel(language)} level` }),
                 el('div', { className: 'row' }, [levelSelect, levelReadout]),
                 el('span', { className: 'hint', text: 'Manual changes reset the adaptation moving average, not word schedules.' }),
               ]),
               el('div', { className: 'field' }, [
                 el('label', { text: 'Preferred story length' }),
                 lengthSelect,
+                lengthHint,
               ]),
             ]),
             el('div', { className: 'field' }, [
-              el('label', { text: 'Furigana default' }),
-              el('div', { className: 'segmented', role: 'group', 'aria-label': 'Furigana default' }, furiganaButtons),
+              el('label', { text: `${pronunciation} default` }),
+              el('div', { className: 'segmented', role: 'group', 'aria-label': `${pronunciation} default` }, furiganaButtons),
+              el('span', {
+                className: 'hint',
+                text:
+                  language === 'zh'
+                    ? 'Show pinyin above Chinese characters. On click reveals one word’s pinyin and definition; Learn-only limits readings to tracked words.'
+                    : 'Show readings above kanji. On click reveals one word’s reading and definition; Learn-only limits them to tracked words.',
+              }),
             ]),
             el('div', { className: 'field' }, [
               el('label', { text: 'Reader text size' }),
@@ -522,8 +624,14 @@ export async function renderSettings(root: HTMLElement, context: AppContext): Pr
         ]),
         el('section', { id: 'about', className: 'settings-section card card-soft' }, [
           el('h2', { text: 'About Yomu' }),
-          el('p', { className: 'muted small', text: 'Yomu is a local-first MVP for adaptive Japanese graded reading. Tokenization uses kuromoji.js in a Web Worker. Furigana is generated from tokenizer readings. Stories are validated for length, token alignment, coverage, kanji, review words, and duplication before display.' }),
-          el('p', { className: 'muted small', text: 'BYOK warning: a browser-held API key is visible to any script on the same origin. Use a scoped key. Do not deploy publicly without revisiting key handling and content policy.' }),
+          el('p', { className: 'muted small', text: 'Yomu is a local-first MVP for adaptive Japanese and Chinese graded reading. Tokenization and readings are produced locally, and stories are validated for length, token alignment, coverage, character level, review words, and duplication before display.' }),
+          el('p', {
+            className: 'muted small',
+            text:
+              keySource === 'shared'
+                ? 'Shared-provider warning: this build injects a provider key so every browser on the network can use it. Anyone who can load the page can extract the key. Use only on a trusted network, prefer a scoped key, and do not deploy publicly with shared defaults enabled.'
+                : 'BYOK warning: a browser-held API key is visible to any script on the same origin. Use a scoped key. Do not deploy publicly without revisiting key handling and content policy.',
+          }),
           el('div', { className: 'row' }, [
             el('a', { className: 'btn btn-secondary', href: '#/stats', text: 'Reading stats' }),
             el('a', { className: 'btn btn-ghost', href: '#/words', text: 'Word list' }),

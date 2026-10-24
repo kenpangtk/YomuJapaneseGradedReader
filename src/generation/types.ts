@@ -1,4 +1,4 @@
-import type { ProviderKind, StoryLength } from '../types';
+import type { Language, ProviderKind, StoryLength } from '../types';
 
 export interface ReviewWordRequest {
   id: string;
@@ -13,7 +13,15 @@ export interface ReviewWordRequest {
   targetOccurrences: number;
 }
 
+export interface RepairStoryContext {
+  title_ja: string;
+  title_en: string;
+  summary_en: string;
+  sentences: { text: string; translation_en: string }[];
+}
+
 export interface GenerationRequest {
+  language: Language;
   level: number;
   newWordCap: number;
   lengthPreference: StoryLength;
@@ -28,6 +36,7 @@ export interface GenerationRequest {
   recentTitles: string[];
   recentStoryIds: string[];
   repairNotes: string[];
+  previousStory?: RepairStoryContext | null;
 }
 
 export interface Provider {

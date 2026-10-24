@@ -16,6 +16,7 @@ const now = new Date('2026-10-17T00:00:00Z').getTime();
 function word(overrides: Partial<Word> = {}): Word {
   return {
     id: '公園::こうえん',
+    language: 'ja',
     dictionary: '公園',
     reading: 'こうえん',
     surfaceForms: ['公園'],

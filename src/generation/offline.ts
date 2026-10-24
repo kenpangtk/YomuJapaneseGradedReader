@@ -1,12 +1,15 @@
 import type { FallbackStory } from '../content/fallbackStories';
-import { lookupGloss } from '../content/glossary';
+import { lookupGlossFor } from '../content/glossary';
+import type { ZhFallbackStory } from '../content/zh/fallbackStories';
 import { bandForLevel, clamp } from '../lib/level';
 import { hashString, mulberry32 } from '../lib/random';
 import { tokenizeSentences } from '../tokenizer/client';
+import type { Language } from '../types';
 import type { ContractSentence, ContractStory, ContractToken } from './contract';
 import type { ReviewWordRequest } from './types';
 
 export interface OfflineStoryOptions {
+  language: Language;
   level: number;
   topic: string;
   interests: string[];
@@ -18,15 +21,30 @@ export interface OfflineStoryOptions {
 
 export interface OfflineStoryResult {
   contract: ContractStory;
-  fallback: FallbackStory;
+  fallback: FallbackStory | ZhFallbackStory;
   usedReviewWords: ReviewWordRequest[];
 }
 
-const LEVEL_INDEX: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5 };
+type AnyFallbackStory = FallbackStory | ZhFallbackStory;
 
-function chooseFallbackStory(options: OfflineStoryOptions, stories: FallbackStory[]): FallbackStory {
-  const band = bandForLevel(clamp(options.level, 1, 5)).code;
-  const targetLevel = LEVEL_INDEX[band];
+const LEVEL_INDEX: Record<string, number> = { N5: 1, N4: 2, N3: 3, N2: 4, N1: 5 };
+const HSK_INDEX: Record<string, number> = { HSK1: 1, HSK2: 2, HSK3: 3, HSK4: 4, HSK5: 5, HSK6: 6 };
+
+function levelIndexFor(level: number, language: Language): number {
+  const code = bandForLevel(clamp(level, 1, 5), language).code;
+  const table = language === 'zh' ? HSK_INDEX : LEVEL_INDEX;
+  return table[code] ?? 1;
+}
+
+function storyTitle(story: AnyFallbackStory): string {
+  return 'titleZh' in story ? story.titleZh : story.titleJa;
+}
+
+function chooseFallbackStory(
+  options: OfflineStoryOptions,
+  stories: AnyFallbackStory[],
+): AnyFallbackStory {
+  const targetLevel = levelIndexFor(options.level, options.language);
   const candidates = stories.filter((story) => story.level === targetLevel);
   const recent = new Set(options.recentStoryIds ?? []);
   const fresh = candidates.filter((story) => !recent.has(story.id));
@@ -39,10 +57,19 @@ function chooseFallbackStory(options: OfflineStoryOptions, stories: FallbackStor
   );
   const finalPool = matching.length ? matching : pool;
   const random = mulberry32(options.seed ^ hashString(options.topic));
-  return finalPool[Math.floor(random() * finalPool.length)] ?? candidates[0];
+  return finalPool[Math.floor(random() * finalPool.length)] ?? candidates[0] ?? stories[0];
 }
 
-function reviewSentence(word: ReviewWordRequest): { text: string; translation: string } {
+async function fallbackStoriesFor(language: Language): Promise<AnyFallbackStory[]> {
+  if (language === 'zh') {
+    const { ZH_FALLBACK_STORIES } = await import('../content/zh/fallbackStories');
+    return ZH_FALLBACK_STORIES;
+  }
+  const { FALLBACK_STORIES } = await import('../content/fallbackStories');
+  return FALLBACK_STORIES;
+}
+
+function reviewSentenceJapanese(word: ReviewWordRequest): { text: string; translation: string } {
   const surface = word.dictionary;
   if (word.pos === 'verb') {
     return {
@@ -80,6 +107,51 @@ function reviewSentence(word: ReviewWordRequest): { text: string; translation: s
   };
 }
 
+function reviewSentenceChinese(word: ReviewWordRequest): { text: string; translation: string } {
+  const surface = word.dictionary;
+  if (word.pos === 'verb') {
+    return {
+      text: `我决定${surface}。以后我还想${surface}。`,
+      translation: `I decided to ${word.gloss}, and I would like to ${word.gloss} again in the future.`,
+    };
+  }
+  if (word.pos === 'adjective' || word.pos === 'i-adjective' || word.pos === 'na-adjective') {
+    return {
+      text: `我觉得很${surface}。今天是很${surface}的一天。`,
+      translation: `I felt very ${word.gloss}. Today was a very ${word.gloss} day.`,
+    };
+  }
+  if (word.pos === 'adverb') {
+    return {
+      text: `我${surface}完成了这件事。明天也想${surface}试一试。`,
+      translation: `I completed this ${word.gloss}. Tomorrow I want to try it ${word.gloss} too.`,
+    };
+  }
+  if (word.pos === 'noun') {
+    return {
+      text: `${surface}是今天的话题。我想更多地了解${surface}。`,
+      translation: `${word.gloss} is today’s topic. I want to learn more about ${word.gloss}.`,
+    };
+  }
+  return {
+    text: `我写了“${surface}”。我又写了一次“${surface}”。`,
+    translation: `I wrote “${surface}.” I wrote “${surface}” again.`,
+  };
+}
+
+function reviewSentence(
+  word: ReviewWordRequest,
+  language: Language,
+): { text: string; translation: string } {
+  return language === 'zh' ? reviewSentenceChinese(word) : reviewSentenceJapanese(word);
+}
+
+function reviewPrelude(language: Language): { text: string; translation_en: string } {
+  return language === 'zh'
+    ? { text: '今天我们先复习几个词。', translation_en: 'Today we will review a few words first.' }
+    : { text: '今日は、前のことを書きました。', translation_en: 'Today I wrote about previous things.' };
+}
+
 function buildToken(
   raw: {
     surface: string;
@@ -91,11 +163,12 @@ function buildToken(
   },
   reviewWords: ReviewWordRequest[],
   fallbackJlpt: number,
+  language: Language,
 ): ContractToken {
   const tagged = reviewWords.find(
     (word) => word.dictionary === raw.dictionary || word.dictionary === raw.surface,
   );
-  const entry = lookupGloss(raw.surface, raw.dictionary, raw.reading);
+  const entry = lookupGlossFor(language, raw.surface, raw.dictionary, raw.reading);
   return {
     surface: raw.surface,
     dictionary: raw.dictionary,
@@ -109,8 +182,8 @@ function buildToken(
 }
 
 export async function buildOfflineStory(options: OfflineStoryOptions): Promise<OfflineStoryResult> {
-  const { FALLBACK_STORIES } = await import('../content/fallbackStories');
-  const fallback = chooseFallbackStory(options, FALLBACK_STORIES);
+  const stories = await fallbackStoriesFor(options.language);
+  const fallback = chooseFallbackStory(options, stories);
   const selected = (options.reviewWords ?? []).slice(0, 3);
   const useReview = Boolean(options.withReviewWords && selected.length);
   const baseSentences = fallback.sentences.map((sentence) => ({
@@ -119,22 +192,26 @@ export async function buildOfflineStory(options: OfflineStoryOptions): Promise<O
   }));
   const reviewSentences = useReview
     ? [
-        {
-          text: '今日は、前のことを書きました。',
-          translation_en: 'Today I wrote about previous things.',
-        },
+        reviewPrelude(options.language),
         ...selected.map((word) => {
-          const sentence = reviewSentence(word);
+          const sentence = reviewSentence(word, options.language);
           return { text: sentence.text, translation_en: sentence.translation };
         }),
       ]
     : [];
   const allSentences = [...reviewSentences, ...baseSentences];
-  const raw = await tokenizeSentences(allSentences.map((sentence) => sentence.text));
+  const raw = await tokenizeSentences(
+    allSentences.map((sentence) => sentence.text),
+    options.language,
+  );
+  const fallbackTag =
+    options.language === 'zh'
+      ? fallback.level
+      : 6 - (levelIndexFor(options.level, options.language) ?? 2);
 
   const sentences: ContractSentence[] = allSentences.map((sentence, index) => {
     const tokens = raw[index].tokens.map((token) =>
-      buildToken(token, selected, 6 - (LEVEL_INDEX[bandForLevel(options.level).code] ?? 2)),
+      buildToken(token, selected, fallbackTag, options.language),
     );
     return {
       text: sentence.text,
@@ -171,8 +248,10 @@ export async function buildOfflineStory(options: OfflineStoryOptions): Promise<O
     })
     .filter((word): word is NonNullable<typeof word> => Boolean(word));
 
+  const baseTitle = storyTitle(fallback);
+  const reviewSuffix = options.language === 'zh' ? '（复习）' : '（復習）';
   const contract: ContractStory = {
-    title_ja: useReview ? `${fallback.titleJa}（復習）` : fallback.titleJa,
+    title_ja: useReview ? `${baseTitle}${reviewSuffix}` : baseTitle,
     title_en: useReview ? `${fallback.titleEn} (Review)` : fallback.titleEn,
     level: options.level,
     summary_en: fallback.summaryEn,
@@ -211,4 +290,3 @@ export async function streamText(
     await new Promise((resolve) => setTimeout(resolve, 8));
   }
 }
-

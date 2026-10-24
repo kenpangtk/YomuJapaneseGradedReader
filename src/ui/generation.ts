@@ -92,8 +92,8 @@ export function runGeneration(context: AppContext, options: GenerationOptions = 
             el('span', { text: update.status }),
           );
           preview.textContent = update.previewChars
-            ? `${update.previewChars.toLocaleString()} characters received · attempt ${update.attempt}`
-            : 'Tokenizing and validating before the story appears.';
+            ? `Attempt ${update.attempt} · ${update.previewChars.toLocaleString()} characters received`
+            : `Attempt ${update.attempt} · waiting for the provider…`;
         },
         controller.signal,
       );

@@ -1,8 +1,9 @@
 import { COMMON_KANA_WORDS, FUNCTION_POS, allowedKanji } from '../content/levelLists';
+import { ZH_FUNCTION_WORDS, ZH_GLOSSARY } from '../content/zh/levelLists';
 import { tokenHasKanji } from './alignment';
-import { glossaryAllowedKanji, lookupGloss } from '../content/glossary';
-import { jlptToScore } from './level';
-import type { ReaderSentence, ReaderToken, Word } from '../types';
+import { glossaryAllowedKanji, lookupGlossFor } from '../content/glossary';
+import { levelTagToScore } from './level';
+import type { Language, ReaderSentence, ReaderToken, Word } from '../types';
 
 export interface CoverageReport {
   countedTokens: number;
@@ -47,14 +48,43 @@ export function lookupTrackedWord(token: ReaderToken, lookup: Map<string, Word>)
   return lookup.get(wordKey(token.dictionary, token.reading)) ?? lookup.get(`surface:${token.surface}`);
 }
 
-function glossaryKnown(token: ReaderToken, level: number): { known: boolean; newWord: boolean } {
-  const entry = lookupGloss(token.surface, token.dictionary, token.reading);
+function chineseKnownChars(level: number): Set<string> {
+  const chars = new Set<string>();
+  const limit = level + 0.8;
+  for (const [word, entry] of Object.entries(ZH_GLOSSARY)) {
+    const score = levelTagToScore(entry.jlpt, 'zh');
+    if (score !== null && score <= limit) {
+      for (const char of word) chars.add(char);
+    }
+  }
+  for (const word of ZH_FUNCTION_WORDS) {
+    for (const char of word) chars.add(char);
+  }
+  return chars;
+}
+
+function glossaryKnown(
+  token: ReaderToken,
+  level: number,
+  language: Language,
+): { known: boolean; newWord: boolean } {
+  const entry = lookupGlossFor(language, token.surface, token.dictionary, token.reading);
   if (entry) {
-    const score = jlptToScore(entry.jlpt ?? null);
-    const known = score !== null && score <= level + 0.25;
+    const score = levelTagToScore(entry.jlpt ?? null, language);
+    const tolerance = language === 'zh' ? 0.8 : 0.25;
+    const known = score !== null && score <= level + tolerance;
     return { known, newWord: !known };
   }
-  if (FUNCTION_POS.has(token.pos) || COMMON_KANA_WORDS.has(token.dictionary) || COMMON_KANA_WORDS.has(token.surface)) {
+  if (language === 'zh') {
+    if (/\bname\b/i.test(token.gloss)) return { known: true, newWord: false };
+    if (ZH_FUNCTION_WORDS.has(token.dictionary) || ZH_FUNCTION_WORDS.has(token.surface)) {
+      return { known: true, newWord: false };
+    }
+  } else if (
+    FUNCTION_POS.has(token.pos) ||
+    COMMON_KANA_WORDS.has(token.dictionary) ||
+    COMMON_KANA_WORDS.has(token.surface)
+  ) {
     return { known: true, newWord: false };
   }
   return { known: false, newWord: token.pos !== 'symbol' };
@@ -65,11 +95,16 @@ export function analyzeCoverage(
   level: number,
   words: Word[],
   exemptWordIds: string[] = [],
+  language: Language = 'ja',
 ): CoverageReport {
   const lookup = buildWordLookup(words);
   const exempt = new Set(exemptWordIds);
-  const allowed = allowedKanji(level);
-  for (const char of glossaryAllowedKanji(level)) allowed.add(char);
+  const allowed = language === 'ja' ? allowedKanji(level) : new Set<string>();
+  if (language === 'ja') {
+    for (const char of glossaryAllowedKanji(level)) allowed.add(char);
+  }
+  const zhChars = language === 'zh' ? chineseKnownChars(level) : null;
+  const tagTolerance = language === 'zh' ? 0.8 : 0.25;
 
   let countedTokens = 0;
   let knownWeight = 0;
@@ -77,7 +112,32 @@ export function analyzeCoverage(
   let kanjiTokens = 0;
   let outOfLevelKanjiTokens = 0;
   const missingFurigana = new Set<string>();
-  const newWords = new Set<string>();
+  const knownForms = new Set<string>();
+  const unknownForms = new Set<string>();
+
+  for (const sentence of sentences) {
+    for (const token of sentence.tokens) {
+      if (token.pos === 'symbol' || !token.surface.trim()) continue;
+      const tracked = lookupTrackedWord(token, lookup);
+      if (tracked && exempt.has(tracked.id)) continue;
+      if (tracked || token.properNoun) {
+        knownForms.add(token.dictionary);
+        continue;
+      }
+      const taggedScore = levelTagToScore(token.jlpt, language);
+      if (taggedScore !== null && taggedScore <= level + tagTolerance) {
+        knownForms.add(token.dictionary);
+        continue;
+      }
+      const fallback = glossaryKnown(token, level, language);
+      const compoundKnown =
+        language === 'zh' &&
+        zhChars !== null &&
+        [...token.dictionary].length > 1 &&
+        [...token.dictionary].every((char) => zhChars.has(char));
+      if (fallback.known || compoundKnown) knownForms.add(token.dictionary);
+    }
+  }
 
   for (const sentence of sentences) {
     for (const token of sentence.tokens) {
@@ -94,28 +154,16 @@ export function analyzeCoverage(
           knownWeight += 0.5;
           rawKnown += 1;
         }
-      } else if (token.properNoun) {
+      } else if (token.properNoun || knownForms.has(token.dictionary)) {
         knownWeight += 1;
         rawKnown += 1;
       } else {
-        const taggedScore = jlptToScore(token.jlpt);
-        if (taggedScore !== null && taggedScore <= level + 0.25) {
-          knownWeight += 1;
-          rawKnown += 1;
-        } else {
-          const fallback = glossaryKnown(token, level);
-          if (fallback.known) {
-            knownWeight += 1;
-            rawKnown += 1;
-          } else if (fallback.newWord) {
-            newWords.add(token.dictionary);
-          }
-        }
+        unknownForms.add(token.dictionary);
       }
 
-      if (tokenHasKanji(token)) {
+      if (language === 'ja' && tokenHasKanji(token)) {
         kanjiTokens += 1;
-        const tokenScore = jlptToScore(token.jlpt);
+        const tokenScore = levelTagToScore(token.jlpt, language);
         const tokenTagKnown = tokenScore !== null && tokenScore <= level + 0.25;
         const isOutOfLevel =
           !tokenTagKnown &&
@@ -131,6 +179,7 @@ export function analyzeCoverage(
     }
   }
 
+  const newWords = [...unknownForms].filter((form) => !knownForms.has(form));
   return {
     countedTokens,
     knownWeight,

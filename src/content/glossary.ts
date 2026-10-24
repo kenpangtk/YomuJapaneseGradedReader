@@ -1,5 +1,7 @@
 import { allowedKanji } from './levelLists';
+import { lookupGlossZh } from './zh/levelLists';
 import { jlptToScore } from '../lib/level';
+import type { Language } from '../types';
 import type { GlossEntry } from '../lib/alignment';
 
 type Entry = [dictionary: string, reading: string, gloss: string, pos: string, jlpt: number];
@@ -1044,6 +1046,19 @@ export function lookupGloss(surface: string, dictionary: string, reading: string
     bySurface.get(surface) ??
     bySurface.get(dictionary)
   );
+}
+
+export function lookupGlossFor(
+  language: Language,
+  surface: string,
+  dictionary: string,
+  reading: string,
+): GlossEntry | undefined {
+  if (language === 'zh') {
+    const entry = lookupGlossZh(surface, dictionary);
+    return entry ? { gloss: entry.gloss, pos: entry.pos, jlpt: entry.jlpt ?? null } : undefined;
+  }
+  return lookupGloss(surface, dictionary, reading);
 }
 
 export function glossaryAllowedKanji(level: number): Set<string> {

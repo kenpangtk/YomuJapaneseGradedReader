@@ -1,9 +1,29 @@
-export type FuriganaMode = 'off' | 'always' | 'hover' | 'learn';
+export type FuriganaMode = 'off' | 'always' | 'hover' | 'click' | 'learn';
 export type StoryLength = 'short' | 'medium' | 'long';
 export type WordState = 'learning' | 'known' | 'suspended';
 export type Difficulty = 'too_easy' | 'just_right' | 'too_hard';
 export type RecallResponse = 'knew' | 'sort_of' | 'didnt_know';
 export type ProviderKind = 'mock' | 'openai';
+export type Language = 'ja' | 'zh';
+
+export const LANGUAGE_LABELS: Record<Language, string> = {
+  ja: 'Japanese',
+  zh: 'Chinese (Mandarin)',
+};
+
+export const LANGUAGE_NATIVE: Record<Language, string> = {
+  ja: '日本語',
+  zh: '中文',
+};
+
+export interface LanguageState {
+  level: number;
+  hardness: number;
+  newWordCap: number;
+  consecutiveHard: number;
+  consecutiveEasy: number;
+  furiganaMode: FuriganaMode;
+}
 
 export const STORY_LENGTH_LABELS: Record<StoryLength, string> = {
   short: 'Short · 2–4 min',
@@ -15,11 +35,13 @@ export const FURIGANA_LABELS: Record<FuriganaMode, string> = {
   off: 'Off',
   always: 'Always',
   hover: 'On hover / tap',
+  click: 'On click',
   learn: 'Learn-only',
 };
 
 export interface Profile {
   id: 'profile';
+  language: Language;
   level: number;
   levelLocked: boolean;
   furiganaMode: FuriganaMode;
@@ -32,6 +54,7 @@ export interface Profile {
   newWordCap: number;
   consecutiveHard: number;
   consecutiveEasy: number;
+  savedLevels: Record<Language, LanguageState>;
   createdAt: number;
   updatedAt: number;
 }
@@ -56,6 +79,7 @@ export interface WordCheckRecord {
 
 export interface Word {
   id: string;
+  language: Language;
   dictionary: string;
   reading: string;
   surfaceForms: string[];
@@ -147,6 +171,7 @@ export interface ValidationSummary {
 
 export interface Story {
   id: string;
+  language: Language;
   createdAt: number;
   level: number;
   levelAtGeneration: number;

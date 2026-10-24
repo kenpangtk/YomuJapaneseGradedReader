@@ -1,7 +1,7 @@
-import type { PhraseSpan, ReaderSentence, ReaderToken } from '../types';
+import type { Language, PhraseSpan, ReaderSentence, ReaderToken } from '../types';
 import type { ContractSentence, ContractStory, ContractTargetWord, ContractToken } from '../generation/contract';
 import type { RawTokenizedSentence } from '../tokenizer/protocol';
-import { buildFurigana } from './furigana';
+import { buildFurigana, buildPinyinFurigana } from './furigana';
 import { hasKanji } from './text';
 
 export interface GlossEntry {
@@ -102,6 +102,7 @@ export function alignSentence(
   contract: ContractSentence,
   raw: RawTokenizedSentence,
   lookup: GlossLookup,
+  language: Language = 'ja',
 ): ReaderSentence {
   const tokens: ReaderToken[] = raw.tokens.map((rawToken) => {
     const overlaps = contract.tokens.filter(
@@ -127,7 +128,10 @@ export function alignSentence(
       gloss,
       start: rawToken.start,
       end: rawToken.end,
-      furigana: buildFurigana(rawToken.surface, reading),
+      furigana:
+        language === 'zh'
+          ? buildPinyinFurigana(rawToken.surface, reading)
+          : buildFurigana(rawToken.surface, reading),
     };
   });
 
@@ -143,12 +147,13 @@ export function alignStory(
   contract: ContractStory,
   rawSentences: RawTokenizedSentence[],
   lookup: GlossLookup,
+  language: Language = 'ja',
 ): ReaderSentence[] {
   if (rawSentences.length !== contract.sentences.length) {
     throw new Error('Tokenizer sentence count did not match the story contract.');
   }
   return contract.sentences.map((sentence, index) =>
-    alignSentence(sentence, rawSentences[index], lookup),
+    alignSentence(sentence, rawSentences[index], lookup, language),
   );
 }
 

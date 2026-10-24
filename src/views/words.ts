@@ -8,8 +8,9 @@ import {
   suspendWord,
 } from '../db';
 import { formatDate } from '../lib/date';
+import { levelSystemLabel, readingFieldLabel } from '../lib/languageDefaults';
 import { scheduleLabel } from '../lib/srs';
-import type { Word, WordState } from '../types';
+import type { Language, Word, WordState } from '../types';
 import { button, el } from '../ui/dom';
 import { showToast } from '../ui/toast';
 
@@ -41,8 +42,8 @@ function csvCell(value: unknown): string {
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-function downloadCsv(words: Word[]): void {
-  const header = ['word', 'reading', 'gloss', 'state', 'recognition', 'exposures', 'last seen', 'due date'];
+function downloadCsv(words: Word[], language: Language): void {
+  const header = ['word', readingFieldLabel(language).toLowerCase(), 'gloss', 'state', 'recognition', 'exposures', 'last seen', 'due date'];
   const rows = words.map((word) => [
     word.dictionary,
     word.reading,
@@ -66,7 +67,9 @@ function downloadCsv(words: Word[]): void {
 }
 
 export async function renderWords(root: HTMLElement, context: AppContext): Promise<void> {
-  let words = await listWords();
+  const language = context.profile.language;
+  const readingLabel = readingFieldLabel(language);
+  let words = await listWords(language);
   let filter: Filter = 'learning';
   let sort: Sort = 'recent';
   let search = '';
@@ -82,7 +85,7 @@ export async function renderWords(root: HTMLElement, context: AppContext): Promi
         button('Export CSV', {
           variant: 'secondary',
           onClick: () => {
-            downloadCsv(words);
+            downloadCsv(words, language);
             showToast('CSV downloaded.');
           },
         }),
@@ -93,7 +96,7 @@ export async function renderWords(root: HTMLElement, context: AppContext): Promi
       el('input', {
         className: 'input',
         type: 'search',
-        placeholder: 'Search word, reading, or gloss',
+        placeholder: `Search word, ${readingLabel.toLowerCase()}, or gloss`,
         'aria-label': 'Search words',
         on: {
           input: (event) => {
@@ -134,8 +137,8 @@ export async function renderWords(root: HTMLElement, context: AppContext): Promi
     el('div', { className: 'word-table' }, [
       el('div', { className: 'word-table-head', 'aria-hidden': 'true' }, [
         el('span', { text: 'Word' }),
-        el('span', { text: 'Reading / gloss' }),
-        el('span', { text: 'JLPT' }),
+        el('span', { text: `${readingLabel} / gloss` }),
+        el('span', { text: levelSystemLabel(language) }),
         el('span', { text: 'Recognition' }),
         el('span', { text: 'Seen / due' }),
         el('span', { text: '' }),
@@ -173,7 +176,7 @@ export async function renderWords(root: HTMLElement, context: AppContext): Promi
   }
 
   async function reload(): Promise<void> {
-    words = await listWords();
+    words = await listWords(language);
     renderRows();
   }
 
@@ -294,7 +297,10 @@ export async function renderWords(root: HTMLElement, context: AppContext): Promi
         el('div', { className: 'small', text: word.reading }),
         el('div', { className: 'faint tiny', text: word.surfaceForms.slice(0, 3).join(' · ') }),
       ]),
-      el('span', { className: 'badge badge-outline', text: word.jlpt ? `N${word.jlpt}` : '—' }),
+      el('span', {
+        className: 'badge badge-outline',
+        text: word.jlpt ? (language === 'zh' ? `HSK ${word.jlpt}` : `JLPT N${word.jlpt}`) : '—',
+      }),
       el('div', { className: 'word-recognition' }, [
         el('div', { className: 'progress-track', role: 'img', 'aria-label': `Recognition ${word.recognition} out of 100` }, [
           el('span', { style: { width: `${word.recognition}%` } }),
@@ -316,7 +322,7 @@ export async function renderWords(root: HTMLElement, context: AppContext): Promi
         ? list.map(rowFor)
         : [
             el('div', { className: 'empty-state', style: { border: '0', borderRadius: '0' } }, [
-              el('div', { className: 'empty-state-mark', 'aria-hidden': 'true', text: '語' }),
+              el('div', { className: 'empty-state-mark', 'aria-hidden': 'true', text: language === 'zh' ? '词' : '語' }),
               el('h2', { text: words.length ? 'No words match this view.' : 'No words yet.' }),
               el('p', {
                 text: words.length

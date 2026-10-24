@@ -1,18 +1,35 @@
-import { db, ensureProfile, getApiKey, getSettings, logGeneration, saveStory } from '../db';
+import {
+  db,
+  ensureProfile,
+  getApiKey,
+  getSettings,
+  listStories,
+  listWords,
+  logGeneration,
+  saveStory,
+} from '../db';
 import { alignStory, normalizeContractToClientTokens, validateContractAlignment } from '../lib/alignment';
-import { lookupGloss } from '../content/glossary';
+import { lookupGlossFor } from '../content/glossary';
 import { allowedGrammar, isAboveLevel, lengthRange } from '../lib/level';
 import { newId } from '../lib/random';
 import { reviewBudgetForLength, selectReviewWords } from '../lib/srs';
 import { validateStory } from '../lib/validation';
 import { tokenizeSentences } from '../tokenizer/client';
-import type { GenerationMeta, Profile, Story, StoryLength, ValidationSummary, Word } from '../types';
+import type {
+  GenerationMeta,
+  Language,
+  Profile,
+  Story,
+  StoryLength,
+  ValidationSummary,
+  Word,
+} from '../types';
 import type { ContractStory } from './contract';
-import { extractJsonObject, validateContractShape } from './contract';
+import { extractJsonObject, parseRepairResponse, validateContractShape } from './contract';
 import { MockProvider } from './mock';
 import { buildOfflineStory } from './offline';
 import { OpenAiProvider } from './openai';
-import type { GenerationRequest, Provider, ReviewWordRequest } from './types';
+import type { GenerationRequest, Provider, RepairStoryContext, ReviewWordRequest } from './types';
 import { isAbortError } from './types';
 
 export interface GenerateStoryOptions {
@@ -39,7 +56,7 @@ function defaultTopic(profile: Profile, seed: number): string {
   return profile.interests[seed % profile.interests.length];
 }
 
-function reviewWordRequest(word: Word, level: number): ReviewWordRequest {
+function reviewWordRequest(word: Word, level: number, language: Language): ReviewWordRequest {
   return {
     id: word.id,
     dictionary: word.dictionary,
@@ -47,7 +64,7 @@ function reviewWordRequest(word: Word, level: number): ReviewWordRequest {
     gloss: word.gloss,
     pos: word.pos,
     jlpt: word.jlpt,
-    aboveLevel: word.aboveLevel || isAboveLevel(word.jlpt, level),
+    aboveLevel: word.aboveLevel || isAboveLevel(word.jlpt, level, language),
     firstStoryPending: word.firstStoryPending,
     sourceSentence: word.sourceSentence,
     targetOccurrences: word.firstStoryPending
@@ -67,22 +84,37 @@ function makeRequest(
   repairNotes: string[],
   previousTitles: string[],
   recentStoryIds: string[],
+  previousStory: RepairStoryContext | null = null,
 ): GenerationRequest {
   return {
+    language: profile.language,
     level,
     newWordCap: profile.newWordCap,
     lengthPreference,
-    targetChars: lengthRange(level, lengthPreference),
+    targetChars: lengthRange(level, lengthPreference, profile.language),
     topic,
     interests: profile.interests,
     seed,
     reviewWords,
     knownWords,
-    grammar: allowedGrammar(level),
+    grammar: allowedGrammar(level, profile.language),
     style: 'warm, clear, contemporary graded reader with a complete ending',
     recentTitles: previousTitles,
     recentStoryIds,
     repairNotes,
+    previousStory,
+  };
+}
+
+function repairContext(contract: ContractStory): RepairStoryContext {
+  return {
+    title_ja: contract.title_ja,
+    title_en: contract.title_en,
+    summary_en: contract.summary_en,
+    sentences: contract.sentences.map((sentence) => ({
+      text: sentence.text,
+      translation_en: sentence.translation_en,
+    })),
   };
 }
 
@@ -96,7 +128,7 @@ function providerFor(settings: Awaited<ReturnType<typeof getSettings>>): Provide
 }
 
 async function sanitizeRequest(request: GenerationRequest): Promise<string> {
-  return JSON.stringify(request).slice(0, 12_000);
+  return JSON.stringify({ ...request, previousStory: null }).slice(0, 12_000);
 }
 
 async function generateAttempt(
@@ -107,6 +139,8 @@ async function generateAttempt(
   recentTexts: string[],
   onUpdate: (update: GenerationUpdate) => void,
   signal: AbortSignal,
+  attempt: number,
+  previousContract: ContractStory | null,
 ): Promise<{
   contract: ContractStory;
   validation: ValidationSummary;
@@ -115,31 +149,47 @@ async function generateAttempt(
   normalized: boolean;
 }> {
   let previewChars = 0;
-  onUpdate({ status: 'Writing a story…', previewChars, attempt: request.repairNotes.length + 1 });
+  const repairing = Boolean(previousContract && request.repairNotes.length);
+  const writingStatus = repairing ? 'Editing the story to fix validation…' : 'Writing a story…';
+  onUpdate({ status: writingStatus, previewChars, attempt });
   const raw = await provider.generate(
     request,
     (chunk) => {
       previewChars += chunk.length;
       onUpdate({
-        status: 'Writing a story…',
+        status: writingStatus,
         previewChars,
-        attempt: request.repairNotes.length + 1,
+        attempt,
       });
     },
     signal,
   );
   if (signal.aborted) throw new DOMException('Generation cancelled.', 'AbortError');
-  onUpdate({ status: 'Checking level and token alignment…', previewChars, attempt: request.repairNotes.length + 1 });
+  onUpdate({
+    status: repairing ? 'Checking the edited story…' : 'Checking level and token alignment…',
+    previewChars,
+    attempt,
+  });
   const parsed = extractJsonObject(raw);
-  const parsedContract = validateContractShape(parsed.value);
-  const raws = await tokenizeSentences(parsedContract.sentences.map((sentence) => sentence.text));
+  const parsedContract =
+    repairing && previousContract
+      ? parseRepairResponse(parsed.value, previousContract)
+      : validateContractShape(parsed.value);
+  const language = request.language;
+  const raws = await tokenizeSentences(
+    parsedContract.sentences.map((sentence) => sentence.text),
+    language,
+  );
+  const lookup = (surface: string, dictionary: string, reading: string) =>
+    lookupGlossFor(language, surface, dictionary, reading);
   const alignment = validateContractAlignment(parsedContract);
   const normalized = alignment.errors.length > 0;
   const contract = normalized
-    ? normalizeContractToClientTokens(parsedContract, raws, lookupGloss)
+    ? normalizeContractToClientTokens(parsedContract, raws, lookup)
     : parsedContract;
-  const sentences = alignStory(contract, raws, lookupGloss);
+  const sentences = alignStory(contract, raws, lookup, language);
   const validation = validateStory(contract, sentences, {
+    language,
     requestedLevel: request.level,
     lengthPreference: request.lengthPreference,
     newWordCap: request.newWordCap,
@@ -163,13 +213,14 @@ export async function generateStory(
   const profile = options.profile ?? (await ensureProfile());
   const settings = await getSettings();
   const provider = providerFor(settings);
-  const allWords = await db.words.toArray();
-  const recentStories = await db.stories.orderBy('createdAt').reverse().limit(20).toArray();
+  const language = profile.language;
+  const allWords = await listWords(language);
+  const recentStories = await listStories(20, language);
   const seed = options.seed ?? Math.floor(Math.random() * 2 ** 31);
   const topic = options.topic?.trim() || defaultTopic(profile, seed);
   const lengthPreference = options.length ?? profile.storyLength;
   const level = profile.level;
-  const range = lengthRange(level, lengthPreference);
+  const range = lengthRange(level, lengthPreference, language);
   const reviewBudget = reviewBudgetForLength(range.target);
   const selected = selectReviewWords(
     allWords,
@@ -182,7 +233,7 @@ export async function generateStory(
     .slice(0, 60);
   const recentTexts = settings.provider === 'mock' ? [] : recentStories.map((story) => story.text);
   const previousTitles = recentStories.map((story) => story.titleJa);
-  const selectedRequests = selected.map((word) => reviewWordRequest(word, level));
+  const selectedRequests = selected.map((word) => reviewWordRequest(word, level, language));
   let activeLevel = level;
   let repairNotes: string[] = [];
   let lastFailure = '';
@@ -191,10 +242,12 @@ export async function generateStory(
   let finalValidation: ValidationSummary | null = null;
   let finalSentences: Story['sentences'] | null = null;
   let lowered = false;
+  let lastContract: ContractStory | null = null;
 
   while (true) {
     if (signal.aborted) throw new DOMException('Generation cancelled.', 'AbortError');
     attempts += 1;
+    const previousStory = lastContract && repairNotes.length ? repairContext(lastContract) : null;
     const request = makeRequest(
       profile,
       activeLevel,
@@ -206,6 +259,7 @@ export async function generateStory(
       repairNotes,
       previousTitles,
       recentStories.map((story) => story.id),
+      previousStory,
     );
     try {
       const result = await generateAttempt(
@@ -216,7 +270,10 @@ export async function generateStory(
         recentTexts,
         onUpdate,
         signal,
+        attempts,
+        lastContract,
       );
+      lastContract = result.contract;
       if (result.normalized) {
         repairNotes = [
           ...repairNotes,
@@ -252,6 +309,7 @@ export async function generateStory(
   if (!finalContract || !finalSentences || !finalValidation) {
     onUpdate({ status: 'Preparing an offline story…', previewChars: 0, attempt: attempts });
     const offline = await buildOfflineStory({
+      language,
       level,
       topic,
       interests: profile.interests,
@@ -259,11 +317,17 @@ export async function generateStory(
       recentStoryIds: recentStories.map((story) => story.id),
       withReviewWords: false,
     });
-    const raw = await tokenizeSentences(offline.contract.sentences.map((sentence) => sentence.text));
-    const sentences = alignStory(offline.contract, raw, lookupGloss);
+    const raw = await tokenizeSentences(
+      offline.contract.sentences.map((sentence) => sentence.text),
+      language,
+    );
+    const lookup = (surface: string, dictionary: string, reading: string) =>
+      lookupGlossFor(language, surface, dictionary, reading);
+    const sentences = alignStory(offline.contract, raw, lookup, language);
     const story = buildStory(
       offline.contract,
       sentences,
+      language,
       level,
       topic,
       seed,
@@ -298,6 +362,7 @@ export async function generateStory(
   const story = buildStory(
     finalContract,
     finalSentences,
+    profile.language,
     level,
     topic,
     seed,
@@ -333,6 +398,7 @@ export async function generateStory(
 function buildStory(
   contract: ContractStory,
   sentences: Story['sentences'],
+  language: Story['language'],
   requestedLevel: number,
   topic: string,
   seed: number,
@@ -361,6 +427,7 @@ function buildStory(
   const tokenCount = sentences.reduce((total, sentence) => total + sentence.tokens.length, 0);
   return {
     id: storyIdFor(),
+    language,
     createdAt: now,
     level: contract.level,
     levelAtGeneration: requestedLevel,

@@ -12,6 +12,7 @@ export class MockProvider implements Provider {
   ): Promise<string> {
     if (signal.aborted) throw abortError();
     const result = await buildOfflineStory({
+      language: request.language,
       level: request.level,
       topic: request.topic,
       interests: request.interests,

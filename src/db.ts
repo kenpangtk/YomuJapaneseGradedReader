@@ -8,11 +8,20 @@ import type {
   ExportBundle,
   Feedback,
   GenerationLog,
+  Language,
   Profile,
   Story,
   Word,
 } from './types';
 import { mergeImportData, type MergeResult } from './lib/exportImport';
+import { defaultLanguageState, normalizeSavedLevels } from './lib/languageDefaults';
+import {
+  FALLBACK_BASE_URL,
+  FALLBACK_MODEL,
+  hasOptedOutOfSharedProvider,
+  resetSharedProviderState,
+  sharedProviderDefaults,
+} from './lib/sharedConfig';
 
 const API_KEY_STORAGE = 'yomu.openai.apiKey';
 
@@ -58,17 +67,60 @@ export class YomuDatabase extends Dexie {
             profile.levelLocked ??= false;
           });
       });
+
+    this.version(3)
+      .stores({
+        profile: 'id',
+        words: 'id, language, state, dueAt, recognition, [language+dictionary+reading], lastSeenAt, [language+state]',
+        stories: 'id, createdAt, level, readState, language, [language+createdAt]',
+        feedback: 'storyId, createdAt',
+        generationLogs: 'id, storyId, createdAt',
+        settings: 'id',
+        events: 'id, type, storyId, createdAt',
+      })
+      .upgrade(async (transaction) => {
+        await transaction
+          .table<Word>('words')
+          .toCollection()
+          .modify((word) => {
+            word.language ??= 'ja';
+          });
+        await transaction
+          .table<Story>('stories')
+          .toCollection()
+          .modify((story) => {
+            story.language ??= 'ja';
+          });
+        await transaction
+          .table<Profile>('profile')
+          .toCollection()
+          .modify((profile) => {
+            profile.language ??= 'ja';
+            profile.savedLevels = normalizeSavedLevels(profile);
+          });
+      });
   }
 }
 
 export const db = new YomuDatabase();
 
-export function getApiKey(): string {
+function readStoredApiKey(): string {
   try {
     return localStorage.getItem(API_KEY_STORAGE) ?? '';
   } catch {
     return '';
   }
+}
+
+export type ApiKeySource = 'saved' | 'shared' | 'none';
+
+export function getApiKeySource(): ApiKeySource {
+  if (readStoredApiKey()) return 'saved';
+  return sharedProviderDefaults.enabled ? 'shared' : 'none';
+}
+
+export function getApiKey(): string {
+  return readStoredApiKey() || (sharedProviderDefaults.enabled ? sharedProviderDefaults.apiKey : '');
 }
 
 export function setApiKey(value: string): void {
@@ -80,20 +132,26 @@ export function clearApiKey(): void {
 }
 
 export function defaultProfile(now = Date.now()): Profile {
+  const ja = defaultLanguageState('ja');
   return {
     id: 'profile',
-    level: 2,
+    language: 'ja',
+    level: ja.level,
     levelLocked: false,
-    furiganaMode: 'always',
+    furiganaMode: ja.furiganaMode,
     translationsDefault: false,
     interests: [],
     storyLength: 'short',
     onboarded: false,
     contentNoticeAcknowledged: false,
-    hardness: 0,
-    newWordCap: 5,
-    consecutiveHard: 0,
-    consecutiveEasy: 0,
+    hardness: ja.hardness,
+    newWordCap: ja.newWordCap,
+    consecutiveHard: ja.consecutiveHard,
+    consecutiveEasy: ja.consecutiveEasy,
+    savedLevels: {
+      ja,
+      zh: defaultLanguageState('zh'),
+    },
     createdAt: now,
     updatedAt: now,
   };
@@ -102,9 +160,9 @@ export function defaultProfile(now = Date.now()): Profile {
 export function defaultSettings(now = Date.now()): AppSettings {
   return {
     id: 'settings',
-    provider: 'mock',
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-4o-mini',
+    provider: sharedProviderDefaults.enabled ? 'openai' : 'mock',
+    baseUrl: sharedProviderDefaults.enabled ? sharedProviderDefaults.baseUrl : FALLBACK_BASE_URL,
+    model: sharedProviderDefaults.enabled ? sharedProviderDefaults.model : FALLBACK_MODEL,
     furiganaDefault: 'always',
     textSize: 100,
     translationsDefault: false,
@@ -138,8 +196,29 @@ export async function patchProfile(patch: Partial<Profile>): Promise<Profile> {
 
 export async function getSettings(): Promise<AppSettings> {
   const existing = await db.settings.get('settings');
-  if (existing) return existing;
-  const settings = defaultSettings();
+  if (!existing) {
+    const settings = defaultSettings();
+    await db.settings.put(settings);
+    return settings;
+  }
+
+  if (!sharedProviderDefaults.enabled || hasOptedOutOfSharedProvider()) return existing;
+  if (readStoredApiKey()) return existing;
+
+  const alreadyShared =
+    existing.provider === 'openai' &&
+    existing.baseUrl === sharedProviderDefaults.baseUrl &&
+    existing.model === sharedProviderDefaults.model;
+
+  if (alreadyShared) return existing;
+
+  const settings: AppSettings = {
+    ...existing,
+    provider: 'openai',
+    baseUrl: sharedProviderDefaults.baseUrl,
+    model: sharedProviderDefaults.model,
+    updatedAt: Date.now(),
+  };
   await db.settings.put(settings);
   return settings;
 }
@@ -148,15 +227,23 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   await db.settings.put({ ...settings, id: 'settings', updatedAt: Date.now() });
 }
 
-export function wordId(dictionary: string, reading: string): string {
-  return `${dictionary}::${reading}`;
+export function wordId(dictionary: string, reading: string, language: Language = 'ja'): string {
+  return language === 'zh' ? `zh:${dictionary}::${reading}` : `${dictionary}::${reading}`;
 }
 
-export async function findWord(dictionary: string, reading: string): Promise<Word | undefined> {
-  return db.words.where('[dictionary+reading]').equals([dictionary, reading]).first();
+export async function findWord(
+  dictionary: string,
+  reading: string,
+  language: Language = 'ja',
+): Promise<Word | undefined> {
+  return db.words
+    .where('[language+dictionary+reading]')
+    .equals([language, dictionary, reading])
+    .first();
 }
 
 export interface AddWordInput {
+  language?: Language;
   dictionary: string;
   reading: string;
   surface: string;
@@ -169,11 +256,13 @@ export interface AddWordInput {
 }
 
 export async function addWord(input: AddWordInput): Promise<{ word: Word; added: boolean }> {
-  const existing = await findWord(input.dictionary, input.reading);
+  const language = input.language ?? 'ja';
+  const existing = await findWord(input.dictionary, input.reading, language);
   if (existing) return { word: existing, added: false };
   const now = Date.now();
   const word: Word = {
-    id: wordId(input.dictionary, input.reading),
+    id: wordId(input.dictionary, input.reading, language),
+    language,
     dictionary: input.dictionary,
     reading: input.reading,
     surfaceForms: [input.surface],
@@ -181,7 +270,7 @@ export async function addWord(input: AddWordInput): Promise<{ word: Word; added:
     pos: input.pos,
     jlpt: input.jlpt,
     state: 'learning',
-    aboveLevel: isAboveLevel(input.jlpt, input.level),
+    aboveLevel: isAboveLevel(input.jlpt, input.level, language),
     firstStoryPending: true,
     recognition: 0,
     successes: 0,
@@ -201,7 +290,7 @@ export async function addWord(input: AddWordInput): Promise<{ word: Word; added:
     return { word, added: true };
   } catch (error) {
     if (error instanceof Dexie.ConstraintError) {
-      const concurrent = await findWord(input.dictionary, input.reading);
+      const concurrent = await findWord(input.dictionary, input.reading, language);
       if (concurrent) return { word: concurrent, added: false };
     }
     throw error;
@@ -216,8 +305,9 @@ export async function updateWord(id: string, patch: Partial<Word>): Promise<Word
   return next;
 }
 
-export async function listWords(): Promise<Word[]> {
-  return db.words.toArray();
+export async function listWords(language?: Language): Promise<Word[]> {
+  if (!language) return db.words.toArray();
+  return db.words.where('language').equals(language).toArray();
 }
 
 export async function markWordKnown(id: string): Promise<void> {
@@ -267,9 +357,12 @@ export async function updateStory(id: string, patch: Partial<Story>): Promise<vo
   await db.stories.update(id, patch);
 }
 
-export async function listStories(limit?: number): Promise<Story[]> {
-  const collection = db.stories.orderBy('createdAt').reverse();
-  return limit ? collection.limit(limit).toArray() : collection.toArray();
+export async function listStories(limit?: number, language?: Language): Promise<Story[]> {
+  const stories = language
+    ? await db.stories.where('language').equals(language).toArray()
+    : await db.stories.toArray();
+  stories.sort((left, right) => right.createdAt - left.createdAt);
+  return limit ? stories.slice(0, limit) : stories;
 }
 
 export async function saveFeedback(feedback: Feedback): Promise<void> {
@@ -318,13 +411,23 @@ export interface StatsSnapshot {
   levelTrend: { at: number; level: number }[];
 }
 
-export async function getStats(): Promise<StatsSnapshot> {
-  const [stories, feedback, words, profile] = await Promise.all([
+export async function getStats(language?: Language): Promise<StatsSnapshot> {
+  const [allStories, allFeedback, allWords, profile] = await Promise.all([
     db.stories.toArray(),
     db.feedback.toArray(),
     db.words.toArray(),
     ensureProfile(),
   ]);
+  const stories = language ? allStories.filter((story) => story.language === language) : allStories;
+  const words = language ? allWords.filter((word) => word.language === language) : allWords;
+  const storyIds = new Set(stories.map((story) => story.id));
+  const feedback = language
+    ? allFeedback.filter((item) => storyIds.has(item.storyId))
+    : allFeedback;
+  const activeLevel = language && profile.language !== language
+    ? profile.savedLevels[language]?.level ?? profile.level
+    : profile.level;
+
   const completed = feedback.filter((item) => !item.skipped && item.comprehension !== null);
   const comprehensionValues = completed
     .map((item) => item.comprehension ?? 0)
@@ -341,7 +444,7 @@ export async function getStats(): Promise<StatsSnapshot> {
     level: feedback.find((item) => item.storyId === story.id)?.levelAfter ?? story.level,
   }));
   if (levelTrend.length === 0) {
-    levelTrend.push({ at: Date.now(), level: profile.level });
+    levelTrend.push({ at: Date.now(), level: activeLevel });
   }
   return {
     storiesRead: stories.filter((story) => story.progress > 0 || story.readState !== 'unread').length,
@@ -379,6 +482,7 @@ export async function clearAllData(): Promise<ClearResult> {
     },
   );
   clearApiKey();
+  resetSharedProviderState();
   return { cleared: true };
 }
 

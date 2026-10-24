@@ -1,7 +1,8 @@
 import type { AppContext } from '../app';
-import { getStats, listStories, listWords } from '../db';
+import { getApiKeySource, getStats, listStories, listWords } from '../db';
 import { bandForLevel, lengthRange, levelSummary } from '../lib/level';
 import { formatDate } from '../lib/date';
+import { levelSystemLabel, pronunciationLabel, readingFieldLabel } from '../lib/languageDefaults';
 import type { Story, StoryLength } from '../types';
 import { STORY_LENGTH_LABELS } from '../types';
 import { getTokenizerStatus, subscribeTokenizerStatus, warmupTokenizer } from '../tokenizer/client';
@@ -16,7 +17,7 @@ function recentStoryRow(story: Story): HTMLElement {
       el('div', { className: 'story-row-title', text: story.titleJa }),
       el('div', { className: 'story-row-meta' }, [
         el('span', { text: formatDate(story.createdAt) }),
-        el('span', { text: `Level ${story.level.toFixed(2)}` }),
+        el('span', { text: levelSummary(story.level, story.language) }),
         el('span', { text: story.topic }),
         el('span', { text: `${story.charCount} chars` }),
         story.isFallback ? el('span', { className: 'badge badge-gold', text: 'Offline' }) : null,
@@ -34,14 +35,20 @@ function recentStoryRow(story: Story): HTMLElement {
 }
 
 export async function renderHome(root: HTMLElement, context: AppContext): Promise<void> {
-  const [stats, stories, words] = await Promise.all([
-    getStats(),
-    listStories(4),
-    listWords(),
-  ]);
   const profile = context.profile;
-  const band = bandForLevel(profile.level);
-  const range = lengthRange(profile.level, profile.storyLength);
+  const language = profile.language;
+  const [stats, stories, words] = await Promise.all([
+    getStats(language),
+    listStories(4, language),
+    listWords(language),
+  ]);
+  const band = bandForLevel(profile.level, language);
+  const range = lengthRange(profile.level, profile.storyLength, language);
+  const languageName = language === 'zh' ? 'Chinese' : 'Japanese';
+  const pronunciation = pronunciationLabel(language);
+  const levelSystem = levelSystemLabel(language);
+  const meterStart = language === 'zh' ? `${levelSystem}1` : 'N5';
+  const meterEnd = language === 'zh' ? `${levelSystem}6` : 'N1';
   let topic = 'surprise';
   let length: StoryLength = profile.storyLength;
   const dueWords = words.filter((word) => word.state === 'learning' && word.dueAt <= Date.now());
@@ -86,23 +93,25 @@ export async function renderHome(root: HTMLElement, context: AppContext): Promis
   const primary = button('Read next', { variant: 'primary', onClick: generate });
 
   const tokenizerNotice = el('div', { hidden: true });
-  const updateTokenizerStatus = () => {
-    const status = getTokenizerStatus();
-    if (status.status === 'ready' || status.status === 'idle') {
-      tokenizerNotice.hidden = true;
-      return;
-    }
-    tokenizerNotice.hidden = false;
-    tokenizerNotice.className = status.status === 'error' ? 'notice notice-error' : 'notice';
-    tokenizerNotice.replaceChildren(
-      status.status === 'error'
-        ? el('span', { text: `Tokenizer could not load: ${status.message ?? 'unknown error'}. Check the README and reload.` })
-        : el('span', { text: 'Loading the Japanese tokenizer in the background. Browsing stays available.' }),
-    );
-  };
-  const unsubscribe = subscribeTokenizerStatus(updateTokenizerStatus);
-  context.setCleanup(unsubscribe);
-  warmupTokenizer().catch(() => updateTokenizerStatus());
+  if (language === 'ja') {
+    const updateTokenizerStatus = () => {
+      const status = getTokenizerStatus();
+      if (status.status === 'ready' || status.status === 'idle') {
+        tokenizerNotice.hidden = true;
+        return;
+      }
+      tokenizerNotice.hidden = false;
+      tokenizerNotice.className = status.status === 'error' ? 'notice notice-error' : 'notice';
+      tokenizerNotice.replaceChildren(
+        status.status === 'error'
+          ? el('span', { text: `Tokenizer could not load: ${status.message ?? 'unknown error'}. Check the README and reload.` })
+          : el('span', { text: 'Loading the Japanese tokenizer in the background. Browsing stays available.' }),
+      );
+    };
+    const unsubscribe = subscribeTokenizerStatus(updateTokenizerStatus);
+    context.setCleanup(unsubscribe);
+    warmupTokenizer().catch(() => updateTokenizerStatus());
+  }
 
   const levelProgress = ((profile.level - 1) / 4) * 100;
 
@@ -112,7 +121,7 @@ export async function renderHome(root: HTMLElement, context: AppContext): Promis
       el('section', { className: 'hero-main', 'aria-labelledby': 'home-title' }, [
         el('div', { className: 'eyebrow', text: `${band.code} · ${band.sub} · ${profile.storyLength} stories` }),
         el('h1', { id: 'home-title', text: 'Read something just beyond easy.' }),
-        el('p', { className: 'hero-lead', text: 'A short, original Japanese story with furigana, instant glosses, and words that come back when they matter.' }),
+        el('p', { className: 'hero-lead', text: `A short, original ${languageName} story with ${pronunciation.toLowerCase()}, instant glosses, and words that come back when they matter.` }),
         el('div', { className: 'hero-actions' }, [
           primary,
           el('a', { className: 'btn btn-secondary', href: '#/words', text: `${learningWords.length} learning words` }),
@@ -130,14 +139,14 @@ export async function renderHome(root: HTMLElement, context: AppContext): Promis
       el('aside', { className: 'hero-side' }, [
         el('section', { className: 'level-card', 'aria-label': 'Current reading level' }, [
           el('div', { className: 'eyebrow', text: 'Current level' }),
-          el('h2', { text: levelSummary(profile.level) }),
+          el('h2', { text: levelSummary(profile.level, language) }),
           el('p', { text: `Continuous score ${profile.level.toFixed(2)} · new-word cap ${profile.newWordCap}. Feedback nudges this score after every story.` }),
           el('div', { className: 'level-meter', role: 'img', 'aria-label': `Level ${profile.level.toFixed(2)} out of 5` }, [
             el('span', { style: { width: `${levelProgress}%` } }),
           ]),
           el('div', { className: 'level-meta' }, [
-            el('span', { text: 'N5' }),
-            el('span', { text: 'N1' }),
+            el('span', { text: meterStart }),
+            el('span', { text: meterEnd }),
           ]),
         ]),
         el('div', { className: 'mini-stats' }, [
@@ -170,12 +179,15 @@ export async function renderHome(root: HTMLElement, context: AppContext): Promis
       ]),
       context.settings.provider === 'mock'
         ? el('span', { className: 'badge badge-gold', text: 'Offline mock provider' })
-        : el('span', { className: 'badge badge-moss', text: `${context.settings.model} · BYOK` }),
+        : el('span', {
+            className: 'badge badge-moss',
+            text: `${context.settings.model} · ${getApiKeySource() === 'shared' ? 'shared key' : 'BYOK'}`,
+          }),
     ]),
     stories.length
       ? el('div', { className: 'story-list' }, stories.map(recentStoryRow))
       : el('div', { className: 'empty-state' }, [
-          el('div', { className: 'empty-state-mark', 'aria-hidden': 'true', text: '読' }),
+          el('div', { className: 'empty-state-mark', 'aria-hidden': 'true', text: language === 'zh' ? '读' : '読' }),
           el('h2', { text: 'Your library is waiting.' }),
           el('p', { text: 'Generate your first story. It will be saved locally with cached token data for instant rereading.' }),
           primary,
@@ -187,7 +199,11 @@ export async function renderHome(root: HTMLElement, context: AppContext): Promis
             el('a', { className: 'small', href: '#/words', text: 'Word list →' }),
           ]),
           el('div', { className: 'chip-row' }, dueWords.slice(0, 8).map((word) =>
-            el('span', { className: 'badge badge-accent', text: `${word.dictionary} · ${word.reading}` }),
+            el('span', {
+              className: 'badge badge-accent',
+              title: readingFieldLabel(language),
+              text: `${word.dictionary} · ${word.reading}`,
+            }),
           )),
         ])
       : null,

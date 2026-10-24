@@ -9,6 +9,7 @@ import type {
   Story,
   Word,
 } from '../types';
+import { normalizeSavedLevels } from './languageDefaults';
 
 interface ImportData {
   profile: Profile | null;
@@ -35,7 +36,10 @@ function validateProfile(value: unknown): Profile | null {
   if (typeof value.level !== 'number' || !Number.isFinite(value.level)) {
     throw new Error('profile.level must be a number.');
   }
-  return value as unknown as Profile;
+  const profile = value as unknown as Profile;
+  profile.language = profile.language === 'zh' ? 'zh' : 'ja';
+  profile.savedLevels = normalizeSavedLevels(profile);
+  return profile;
 }
 
 function validateSettings(value: unknown): AppSettings | null {
@@ -51,7 +55,9 @@ function validateWords(values: unknown[]): Word[] {
       throw new Error(`words[${index}] needs dictionary and reading.`);
     }
     if (typeof value.state !== 'string') throw new Error(`words[${index}] needs a state.`);
-    return value as unknown as Word;
+    const word = value as unknown as Word;
+    word.language = word.language === 'zh' ? 'zh' : 'ja';
+    return word;
   });
 }
 
@@ -62,7 +68,9 @@ function validateStories(values: unknown[]): Story[] {
       throw new Error(`stories[${index}] needs id and text.`);
     }
     if (!Array.isArray(value.sentences)) throw new Error(`stories[${index}].sentences must be an array.`);
-    return value as unknown as Story;
+    const story = value as unknown as Story;
+    story.language = story.language === 'zh' ? 'zh' : 'ja';
+    return story;
   });
 }
 
@@ -134,12 +142,14 @@ export function parseImport(raw: string): ImportPreview {
   };
 }
 
-function wordKey(word: Pick<Word, 'dictionary' | 'reading'>): string {
-  return `${word.dictionary}::${word.reading}`;
+function wordKey(word: Pick<Word, 'language' | 'dictionary' | 'reading'>): string {
+  return `${word.language ?? 'ja'}::${word.dictionary}::${word.reading}`;
 }
 
-function stableWordId(word: Pick<Word, 'dictionary' | 'reading'>): string {
-  return `${word.dictionary}::${word.reading}`;
+function stableWordId(word: Pick<Word, 'language' | 'dictionary' | 'reading'>): string {
+  return word.language === 'zh'
+    ? `zh:${word.dictionary}::${word.reading}`
+    : `${word.dictionary}::${word.reading}`;
 }
 
 export interface MergeResult extends ImportData {

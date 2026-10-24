@@ -4,8 +4,9 @@ import { bandForLevel, levelSummary } from '../lib/level';
 import { el } from '../ui/dom';
 
 export async function renderStats(root: HTMLElement, context: AppContext): Promise<void> {
-  const stats = await getStats();
-  const band = bandForLevel(context.profile.level);
+  const language = context.profile.language;
+  const stats = await getStats(language);
+  const band = bandForLevel(context.profile.level, language);
   const trend = stats.levelTrend.slice(-24);
   const maxLevel = 5;
   const barHeights = trend.map((point) => Math.max(4, (point.level / maxLevel) * 100));
@@ -41,7 +42,7 @@ export async function renderStats(root: HTMLElement, context: AppContext): Promi
       el('div', { className: 'card' }, [
         el('div', { className: 'row-between' }, [
           el('h2', { text: 'Level trend' }),
-          el('span', { className: 'badge badge-moss', text: levelSummary(context.profile.level) }),
+          el('span', { className: 'badge badge-moss', text: levelSummary(context.profile.level, language) }),
         ]),
         el('p', { className: 'small muted', text: 'Each bar is the level after a finished story. Feedback moves the score in small steps.' }),
         el('div', { className: 'sparkline', role: 'img', 'aria-label': 'Level trend over recent finished stories' },

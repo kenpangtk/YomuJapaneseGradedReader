@@ -1,5 +1,5 @@
 import type { ContractStory } from '../generation/contract';
-import type { ReaderSentence, ValidationSummary, Word } from '../types';
+import type { Language, ReaderSentence, ValidationSummary, Word } from '../types';
 import { validateContractAlignment } from './alignment';
 import { analyzeCoverage, countWordOccurrences } from './coverage';
 import { lengthRange } from './level';
@@ -14,6 +14,7 @@ export interface ValidationOptions {
   selectedWords: Word[];
   exemptWordIds: string[];
   recentTexts: string[];
+  language?: Language;
 }
 
 export function textSimilarity(left: string, right: string): number {
@@ -47,8 +48,9 @@ export function validateStory(
   const alignment = validateContractAlignment(contract);
   errors.push(...alignment.errors);
 
+  const language = options.language ?? 'ja';
   const length = charCount(contract.text);
-  const range = lengthRange(options.requestedLevel, options.lengthPreference);
+  const range = lengthRange(options.requestedLevel, options.lengthPreference, language);
   const softMin = Math.floor(range.min * 0.8);
   const softMax = Math.ceil(range.max * 1.2);
   const hardMin = Math.floor(range.min * 0.7);
@@ -72,20 +74,29 @@ export function validateStory(
     options.requestedLevel,
     options.trackedWords,
     options.exemptWordIds,
+    language,
   );
   const allWords = options.selectedWords;
-  if (coverage.adjustedCoverage < 0.93) {
+  const chinese = language === 'zh';
+  const coverageFloor = chinese ? 0.8 : 0.93;
+  const coverageTarget = chinese ? 0.9 : 0.95;
+  if (coverage.adjustedCoverage < coverageFloor) {
     errors.push(
-      `Assumed-known coverage is ${(coverage.adjustedCoverage * 100).toFixed(1)}%; at least 93% is required.`,
+      `Assumed-known coverage is ${(coverage.adjustedCoverage * 100).toFixed(1)}%; at least ${(coverageFloor * 100).toFixed(0)}% is required.`,
     );
-  } else if (coverage.adjustedCoverage < 0.95) {
+  } else if (coverage.adjustedCoverage < coverageTarget) {
     warnings.push(
-      `Assumed-known coverage is ${(coverage.adjustedCoverage * 100).toFixed(1)}%; slightly below the 95% target.`,
+      `Assumed-known coverage is ${(coverage.adjustedCoverage * 100).toFixed(1)}%; below the ${(coverageTarget * 100).toFixed(0)}% target. Story accepted; feedback will adjust the next one.`,
     );
   }
-  if (coverage.newWords.length > options.newWordCap) {
+  const newWordHardCap = chinese ? options.newWordCap + 12 : options.newWordCap;
+  if (coverage.newWords.length > newWordHardCap) {
     errors.push(
-      `There are ${coverage.newWords.length} new dictionary forms; the cap is ${options.newWordCap}.`,
+      `There are ${coverage.newWords.length} new dictionary forms; the hard cap is ${newWordHardCap}.`,
+    );
+  } else if (coverage.newWords.length > options.newWordCap) {
+    warnings.push(
+      `There are ${coverage.newWords.length} new dictionary forms vs the ${options.newWordCap} target. Story accepted; feedback will adjust the next one.`,
     );
   }
   if (coverage.kanjiOutOfLevelPct > 0.02) {

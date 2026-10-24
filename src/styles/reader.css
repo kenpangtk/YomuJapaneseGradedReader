@@ -195,6 +195,11 @@
   margin-top: 0.1em;
 }
 
+.sentence-end {
+  display: inline-block;
+  white-space: nowrap;
+}
+
 .token {
   position: relative;
   display: inline;
@@ -252,6 +257,15 @@
 .furigana-hover .token:hover rt,
 .furigana-hover .token:focus-visible rt,
 .furigana-hover .token.popover-open rt {
+  visibility: visible;
+}
+
+.furigana-click .token rt {
+  visibility: hidden;
+}
+
+.furigana-click .token.popover-open rt,
+.furigana-click .token:focus-visible rt {
   visibility: visible;
 }
 

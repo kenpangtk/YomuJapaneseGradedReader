@@ -1,4 +1,4 @@
-import { buildSystemPrompt, buildUserPrompt } from './prompt';
+import { buildEditSystemPrompt, buildSystemPrompt, buildUserPrompt } from './prompt';
 import type { GenerationRequest, Provider } from './types';
 import { abortError } from './types';
 
@@ -67,6 +67,7 @@ export class OpenAiProvider implements Provider {
     }
     if (signal.aborted) throw abortError();
 
+    const editing = Boolean(request.previousStory && request.repairNotes.length);
     let response: Response;
     try {
       response = await fetch(chatUrl(this.options.baseUrl), {
@@ -78,10 +79,15 @@ export class OpenAiProvider implements Provider {
         body: JSON.stringify({
           model: this.options.model,
           stream: true,
-          temperature: 0.8,
+          temperature: editing ? 0.35 : 0.8,
           max_tokens: 8000,
           messages: [
-            { role: 'system', content: buildSystemPrompt() },
+            {
+              role: 'system',
+              content: editing
+                ? buildEditSystemPrompt(request.language)
+                : buildSystemPrompt(request.language),
+            },
             { role: 'user', content: buildUserPrompt(request) },
           ],
         }),

@@ -1,5 +1,5 @@
 import { baseNewWordCap, bandForLevel, clamp, clampLevel, levelSummary, lookupBaseline } from './level';
-import type { Difficulty, Profile, RecallResponse, StoryLength } from '../types';
+import type { Difficulty, Language, Profile, RecallResponse, StoryLength } from '../types';
 
 export interface FeedbackSignals {
   comprehension: number | null;
@@ -32,8 +32,12 @@ function clampSignal(value: number): number {
   return clamp(value, -1, 1);
 }
 
-export function lookupHardness(signals: FeedbackSignals, level: number): number {
-  const baseline = lookupBaseline(level);
+export function lookupHardness(
+  signals: FeedbackSignals,
+  level: number,
+  language: Language = 'ja',
+): number {
+  const baseline = lookupBaseline(level, language);
   const weightedLookups = signals.lookupCount + signals.translationReveals * 0.5;
   const rate = signals.charCount > 0 ? (weightedLookups / signals.charCount) * 100 : 0;
   return clampSignal((rate - baseline) / baseline);
@@ -54,8 +58,9 @@ function buildSummary(
   consolidation: boolean,
   easyBoost: boolean,
   behaviorOnly: boolean,
+  language: Language,
 ): string {
-  const parts = [`Next story: ${levelSummary(level)}`];
+  const parts = [`Next story: ${levelSummary(level, language)}`];
   if (levelDelta <= -0.005) parts.push(`level down ${Math.abs(levelDelta).toFixed(2)}`);
   else if (levelDelta >= 0.005) parts.push(`level up ${levelDelta.toFixed(2)}`);
   else if (behaviorOnly) parts.push('level updated from reading behavior');
@@ -71,8 +76,9 @@ export function computeAdaptation(
   profile: Profile,
   signals: FeedbackSignals,
   skipped: boolean,
+  language: Language = profile.language,
 ): AdaptationResult {
-  const lHard = lookupHardness(signals, profile.level);
+  const lHard = lookupHardness(signals, profile.level, language);
   let level = profile.level;
   let hardness = profile.hardness;
   let newWordCap = profile.newWordCap;
@@ -110,6 +116,7 @@ export function computeAdaptation(
         false,
         false,
         true,
+        language,
       ),
       lookupHardness: lHard,
       comprehensionHardness,
@@ -163,7 +170,7 @@ export function computeAdaptation(
 
   if (!consolidation) {
     const comprehensionAdjustment = comprehension >= 4 ? 1 : comprehension <= 2 ? -2 : 0;
-    newWordCap = baseNewWordCap(level) + comprehensionAdjustment + (easyBoost ? 2 : 0);
+    newWordCap = baseNewWordCap(level, language) + comprehensionAdjustment + (easyBoost ? 2 : 0);
     newWordCap = clamp(newWordCap, 0, 12);
   }
 
@@ -184,6 +191,7 @@ export function computeAdaptation(
       consolidation,
       easyBoost,
       false,
+      language,
     ),
     lookupHardness: lHard,
     comprehensionHardness,
@@ -194,7 +202,7 @@ export function computeAdaptation(
   };
 }
 
-export function nextLengthLabel(result: AdaptationResult): string {
-  const band = bandForLevel(result.level);
+export function nextLengthLabel(result: AdaptationResult, language: Language = 'ja'): string {
+  const band = bandForLevel(result.level, language);
   return `${band.code} ${band.sub} · ${result.newWordCap} new-word cap`;
 }

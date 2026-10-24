@@ -4,8 +4,9 @@ import { formatDate } from '../lib/date';
 import { levelSummary } from '../lib/level';
 import { el } from '../ui/dom';
 
-export async function renderHistory(root: HTMLElement, _context: AppContext): Promise<void> {
-  const [stories, feedback] = await Promise.all([listStories(), listFeedback()]);
+export async function renderHistory(root: HTMLElement, context: AppContext): Promise<void> {
+  const language = context.profile.language;
+  const [stories, feedback] = await Promise.all([listStories(undefined, language), listFeedback()]);
   const feedbackByStory = new Map(feedback.map((item) => [item.storyId, item]));
 
   const rows = stories.map((story) => {
@@ -16,7 +17,7 @@ export async function renderHistory(root: HTMLElement, _context: AppContext): Pr
         el('a', { className: 'story-row-title', href: `#/reader/${story.id}`, text: story.titleJa }),
         el('div', { className: 'story-row-meta' }, [
           el('span', { text: formatDate(story.createdAt) }),
-          el('span', { text: levelSummary(story.level) }),
+          el('span', { text: levelSummary(story.level, story.language) }),
           el('span', { text: story.topic }),
           el('span', { text: `${story.tokenCount} tokens` }),
           story.isFallback ? el('span', { className: 'badge badge-gold', text: 'Offline' }) : null,
@@ -52,7 +53,7 @@ export async function renderHistory(root: HTMLElement, _context: AppContext): Pr
     stories.length
       ? el('div', { className: 'story-list' }, rows)
       : el('div', { className: 'empty-state' }, [
-          el('div', { className: 'empty-state-mark', 'aria-hidden': 'true', text: '本' }),
+          el('div', { className: 'empty-state-mark', 'aria-hidden': 'true', text: language === 'zh' ? '书' : '本' }),
           el('h2', { text: 'No stories yet.' }),
           el('p', { text: 'Your completed and in-progress stories will appear here, with their ratings and tokenized text intact.' }),
           el('a', { className: 'btn btn-primary', href: '#/home', text: 'Generate a story' }),

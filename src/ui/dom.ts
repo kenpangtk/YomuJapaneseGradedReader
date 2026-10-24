@@ -114,5 +114,5 @@ export function textNode(text: string): Text {
 }
 
 export function setDocumentTitle(title: string): void {
-  document.title = title ? `${title} · Yomu` : 'Yomu — Japanese Graded Reader';
+  document.title = title ? `${title} · Yomu` : 'Yomu — Adaptive Graded Reader';
 }

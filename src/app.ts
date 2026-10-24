@@ -1,7 +1,9 @@
 import { ensureProfile, getSettings } from './db';
+import { switchLanguage } from './lib/language';
 import { levelSummary } from './lib/level';
 import { setDocumentTitle, el } from './ui/dom';
-import type { AppSettings, Profile } from './types';
+import { LANGUAGE_LABELS } from './types';
+import type { AppSettings, Language, Profile } from './types';
 import { renderOnboarding } from './views/onboarding';
 import { renderHome } from './views/home';
 import { renderReader } from './views/reader';
@@ -35,6 +37,41 @@ function parseRoute(): { name: string; param: string | null } {
   return { name: name || 'home', param: rest.length ? rest.join('/') : null };
 }
 
+async function handleLanguageSwitch(language: Language): Promise<void> {
+  try {
+    await switchLanguage(language);
+    if (location.hash === '#/home') {
+      await renderApp();
+    } else {
+      location.hash = '#/home';
+    }
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function languageSwitch(profile: Profile): HTMLElement {
+  const options: { language: Language; label: string }[] = [
+    { language: 'ja', label: 'Japanese' },
+    { language: 'zh', label: '中文' },
+  ];
+  return el('div', { className: 'language-switch', role: 'group', 'aria-label': 'Learning language' },
+    options.map(({ language, label }) =>
+      el('button', {
+        type: 'button',
+        'aria-pressed': profile.language === language ? 'true' : 'false',
+        'aria-label': `Switch to ${LANGUAGE_LABELS[language]}`,
+        title: `Switch to ${LANGUAGE_LABELS[language]}`,
+        on: {
+          click: () => {
+            if (profile.language !== language) void handleLanguageSwitch(language);
+          },
+        },
+      }, label),
+    ),
+  );
+}
+
 function shell(profile: Profile, content: HTMLElement, active: string): HTMLElement {
   const header = el('header', { className: 'site-header' }, [
     el('div', { className: 'site-header-inner' }, [
@@ -42,7 +79,7 @@ function shell(profile: Profile, content: HTMLElement, active: string): HTMLElem
         el('span', { className: 'brand-mark', 'aria-hidden': 'true', text: '読' }),
         el('span', {}, [
           el('span', { className: 'brand-name', text: 'Yomu' }),
-          el('span', { className: 'brand-sub', text: 'Japanese graded reader' }),
+          el('span', { className: 'brand-sub', text: 'Adaptive graded reader' }),
         ]),
       ]),
       el('nav', { className: 'site-nav', 'aria-label': 'Main navigation' }, [
@@ -52,12 +89,15 @@ function shell(profile: Profile, content: HTMLElement, active: string): HTMLElem
         navLink('Stats', '#/stats', active === 'stats'),
         navLink('Settings', '#/settings', active === 'settings'),
       ]),
-      el('a', { className: 'header-level', href: '#/settings', title: 'Reading level' }, [
-        el('span', { className: 'level-dot', 'aria-hidden': 'true' }),
-        el('span', {}, [
-          el('strong', { text: levelSummary(profile.level) }),
-          ' ',
-          el('span', { text: `${profile.level.toFixed(2)}` }),
+      el('div', { className: 'header-actions' }, [
+        languageSwitch(profile),
+        el('a', { className: 'header-level', href: '#/settings', title: `Reading level · ${LANGUAGE_LABELS[profile.language]}` }, [
+          el('span', { className: 'level-dot', 'aria-hidden': 'true' }),
+          el('span', {}, [
+            el('strong', { text: levelSummary(profile.level, profile.language) }),
+            ' ',
+            el('span', { text: `${profile.level.toFixed(2)}` }),
+          ]),
         ]),
       ]),
     ]),

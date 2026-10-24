@@ -1,3 +1,4 @@
+import type { Language } from '../types';
 import type { RawTokenizedSentence, WorkerRequest, WorkerResponse } from './protocol';
 
 export type TokenizerStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -80,7 +81,14 @@ export function warmupTokenizer(): Promise<void> {
   return warmupPromise;
 }
 
-export async function tokenizeSentences(sentences: string[]): Promise<RawTokenizedSentence[]> {
+export async function tokenizeSentences(
+  sentences: string[],
+  language: Language = 'ja',
+): Promise<RawTokenizedSentence[]> {
+  if (language === 'zh') {
+    const { tokenizeChineseSentences } = await import('./zh');
+    return tokenizeChineseSentences(sentences);
+  }
   await warmupTokenizer();
   const id = nextId++;
   const response = await send({ type: 'tokenize', id, sentences });

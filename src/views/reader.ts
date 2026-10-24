@@ -11,6 +11,11 @@ import {
 } from '../db';
 import { buildWordLookup, lookupTrackedWord, wordKey } from '../lib/coverage';
 import { levelSummary } from '../lib/level';
+import { levelSystemLabel, pronunciationLabel, readingFieldLabel } from '../lib/languageDefaults';
+import { alignSentence } from '../lib/alignment';
+import { lookupGlossFor } from '../content/glossary';
+import { tokenizeSentences } from '../tokenizer/client';
+import type { ContractSentence } from '../generation/contract';
 import type { FuriganaMode, PhraseSpan, ReaderSentence, ReaderToken, Story, Word } from '../types';
 import { FURIGANA_LABELS } from '../types';
 import { button, el } from '../ui/dom';
@@ -31,7 +36,7 @@ interface TranslationInfo {
   shown: boolean;
 }
 
-const FURIGANA_CYCLE: FuriganaMode[] = ['off', 'always', 'hover', 'learn'];
+const FURIGANA_CYCLE: FuriganaMode[] = ['off', 'always', 'hover', 'click', 'learn'];
 
 function readingMinutes(story: Story): number {
   const rate = story.level < 2 ? 170 : story.level < 3 ? 250 : story.level < 4 ? 330 : 400;
@@ -77,7 +82,18 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     return;
   }
   const story: Story = loadedStory;
-  const words = await listWords();
+  const language = story.language;
+  const pronunciation = pronunciationLabel(language);
+  const readingLabel = readingFieldLabel(language);
+  const levelSystem = levelSystemLabel(language);
+  const htmlLang = language === 'zh' ? 'zh-CN' : 'ja';
+  const titleLookup = (surface: string, dictionary: string, reading: string) =>
+    lookupGlossFor(language, surface, dictionary, reading);
+  const levelTagLabel = (tag: number | null): string => {
+    if (!tag) return `${levelSystem} —`;
+    return language === 'zh' ? `${levelSystem} ${tag}` : `N${tag}`;
+  };
+  const words = await listWords(language);
   const trackedMap = buildWordLookup(words);
   const allTokenInfos: TokenInfo[] = [];
   const translationInfos: TranslationInfo[] = [];
@@ -98,8 +114,8 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
   const furiganaButton = el('button', {
     type: 'button',
     className: 'reader-tool',
-    'aria-label': `Furigana: ${FURIGANA_LABELS[mode]}. Press F to cycle.`,
-    title: `Furigana: ${FURIGANA_LABELS[mode]} (F)`,
+    'aria-label': `${pronunciation}: ${FURIGANA_LABELS[mode]}. Press F to cycle.`,
+    title: `${pronunciation}: ${FURIGANA_LABELS[mode]} (F)`,
   });
   const translationButton = el('button', {
     type: 'button',
@@ -107,7 +123,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     'aria-label': 'Toggle all sentence translations. Press T.',
     title: 'Toggle translations (T)',
     'aria-pressed': 'false',
-  }, [el('span', { text: 'T · ' }), el('span', { className: 'reader-tool-label', text: '訳' })]);
+  }, [el('span', { text: 'T · ' }), el('span', { className: 'reader-tool-label', text: language === 'zh' ? '译' : '訳' })]);
   const textSizeValueLabel = el('span', { className: 'reader-tool-label', text: `${textSize}%` });
   const textSizeButton = el('button', {
     type: 'button',
@@ -129,7 +145,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
         el('span', { 'aria-hidden': 'true', text: '←' }),
         el('span', { text: 'Library' }),
       ]),
-      el('span', { className: 'reader-level', text: `${levelSummary(story.level)} · ${story.charCount} chars` }),
+      el('span', { className: 'reader-level', text: `${levelSummary(story.level, language)} · ${story.charCount} chars` }),
       el('div', { className: 'reader-toolbar' }, [
         furiganaButton,
         translationButton,
@@ -148,7 +164,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     el('div', { className: 'reader-progress', 'aria-hidden': 'true' }, [progressFill]),
   ]);
 
-  const storyText = el('div', { className: `story-text furigana-${mode}`, lang: 'ja', 'aria-label': story.titleJa });
+  const storyText = el('div', { className: `story-text furigana-${mode}`, lang: htmlLang, 'aria-label': story.titleJa });
   const providerNotice =
     story.generationMeta.provider === 'mock' && context.settings.provider === 'openai'
       ? el('div', { className: 'notice reader-notice' }, [
@@ -222,8 +238,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
         type: 'button',
         className: 'sentence-translate',
         'aria-label': `Show sentence translation ${sentenceIndex + 1}`,
-        title: 'Show translation',
-        text: '訳',
+        text: language === 'zh' ? '译' : '訳',
       });
       sentence.tokens.forEach((token, tokenIndex) => {
         const tracked = lookupTrackedWord(token, trackedMap);
@@ -249,9 +264,13 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
       translateButton.addEventListener('click', () => {
         toggleTranslation(sentenceIndex, true);
       });
-      sentenceEl.append(
-        el('span', { className: 'sentence-tools', 'aria-hidden': 'false' }, [translateButton]),
-      );
+      const tools = el('span', { className: 'sentence-tools', 'aria-hidden': 'false' }, [translateButton]);
+      const lastToken = sentenceEl.lastElementChild;
+      if (lastToken) {
+        sentenceEl.append(el('span', { className: 'sentence-end' }, [lastToken, tools]));
+      } else {
+        sentenceEl.append(tools);
+      }
       sentenceEl.append(translation);
       paragraph.append(sentenceEl);
     });
@@ -319,12 +338,15 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     ]),
   ]);
 
+  const titleHost = el('h1', { className: `reader-title furigana-${mode}`, lang: htmlLang, 'aria-label': story.titleJa });
+  titleHost.textContent = story.titleJa;
+
   main.append(
     el('div', { className: 'reader-kicker' }, [
       el('span', { text: story.topic }),
       el('span', { className: 'badge badge-outline', text: story.isFallback ? 'Offline fallback' : 'Saved locally' }),
     ]),
-    el('h1', { className: 'reader-title', text: story.titleJa }),
+    titleHost,
     ...(story.titleEn ? [el('div', { className: 'reader-subtitle', text: story.titleEn })] : []),
     el('div', { className: 'reader-meta' }, [
       el('span', { text: `${readingMinutes(story)} min read` }),
@@ -364,7 +386,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     end,
     el('p', { className: 'reader-tip' }, [
       el('span', { className: 'kbd', text: 'F' }),
-      ' furigana · ',
+      ` ${pronunciation.toLowerCase()} · `,
       el('span', { className: 'kbd', text: 'T' }),
       ' translations · ',
       el('span', { className: 'kbd', text: 'Enter' }),
@@ -379,6 +401,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
   shell.append(header, main);
   root.replaceChildren(shell);
   applyFurigana(mode, false);
+  void hydrateTitle(titleHost);
 
   // Translation state
   function toggleTranslation(index: number, userAction: boolean): void {
@@ -439,14 +462,16 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
   // Furigana
   function applyFurigana(next: FuriganaMode, persist = true): void {
     mode = next;
-    storyText.classList.remove('furigana-off', 'furigana-always', 'furigana-hover', 'furigana-learn');
+    storyText.classList.remove('furigana-off', 'furigana-always', 'furigana-hover', 'furigana-click', 'furigana-learn');
     storyText.classList.add(`furigana-${mode}`);
+    titleHost.classList.remove('furigana-off', 'furigana-always', 'furigana-hover', 'furigana-click', 'furigana-learn');
+    titleHost.classList.add(`furigana-${mode}`);
     furiganaButton.replaceChildren(
       el('span', { text: 'F · ' }),
       el('span', { className: 'reader-tool-label', text: mode === 'off' ? 'Off' : mode === 'always' ? 'Always' : mode === 'hover' ? 'Hover' : 'Learn' }),
     );
-    furiganaButton.setAttribute('aria-label', `Furigana: ${FURIGANA_LABELS[mode]}. Press F to cycle.`);
-    furiganaButton.title = `Furigana: ${FURIGANA_LABELS[mode]} (F)`;
+    furiganaButton.setAttribute('aria-label', `${pronunciation}: ${FURIGANA_LABELS[mode]}. Press F to cycle.`);
+    furiganaButton.title = `${pronunciation}: ${FURIGANA_LABELS[mode]} (F)`;
     if (!persist) return;
     const nextProfile = { ...context.profile, furiganaMode: mode, updatedAt: Date.now() };
     context.profile = nextProfile;
@@ -506,6 +531,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
       return;
     }
     const result = await addWord({
+      language,
       dictionary: info.token.dictionary,
       reading: info.token.reading,
       surface: info.token.surface,
@@ -514,7 +540,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
       jlpt: info.token.jlpt,
       sourceStoryId: story.id,
       sourceSentence: info.sentence.text,
-      level: context.profile.level,
+      level: story.level,
     });
     addToTrackedMap(result.word, info.token.surface);
     trackWordClassUpdates();
@@ -534,6 +560,68 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
         });
       },
     });
+  }
+
+  async function hydrateTitle(host: HTMLElement): Promise<void> {
+    try {
+      const [raw] = await tokenizeSentences([story.titleJa], language);
+      if (!raw || raw.tokens.length === 0 || !host.isConnected || closedByRoute) return;
+
+      const titleContract: ContractSentence = {
+        text: story.titleJa,
+        translation_en: story.titleEn,
+        tokens: [],
+        phrases: [],
+      };
+      const baseSentence = alignSentence(titleContract, raw, titleLookup, language);
+      const glossByKey = new Map<string, { gloss: string; jlpt: number | null }>();
+      for (const sentence of story.sentences) {
+        for (const token of sentence.tokens) {
+          if (!token.gloss || token.gloss === 'No gloss available') continue;
+          const key = `${token.dictionary}|${token.reading}`;
+          if (!glossByKey.has(key)) glossByKey.set(key, { gloss: token.gloss, jlpt: token.jlpt });
+        }
+      }
+
+      const titleSentence: ReaderSentence = {
+        ...baseSentence,
+        tokens: baseSentence.tokens.map((token) => {
+          const hit = glossByKey.get(`${token.dictionary}|${token.reading}`);
+          return hit ? { ...token, gloss: hit.gloss, jlpt: token.jlpt ?? hit.jlpt } : token;
+        }),
+      };
+
+      const infos: TokenInfo[] = [];
+      const elements: HTMLElement[] = titleSentence.tokens.map((token, tokenIndex) => {
+        const tracked = lookupTrackedWord(token, trackedMap);
+        const forceFurigana = Boolean(tracked && tracked.state === 'learning' && tracked.exposures === 0);
+        const classes = ['token'];
+        if (tracked?.state === 'learning') classes.push('is-learning');
+        if (tracked?.state === 'known') classes.push('is-known');
+        if (forceFurigana) classes.push('force-furigana');
+        const tokenEl = el('span', {
+          className: classes.join(' '),
+          role: 'button',
+          tabindex: '-1',
+          'aria-label': `${token.surface}${token.reading && token.reading !== token.surface ? `, ${token.reading}` : ''}, ${token.gloss}`,
+          'aria-haspopup': 'dialog',
+        });
+        tokenEl.append(renderSegments(token));
+        infos.push({ element: tokenEl, token, sentence: titleSentence, sentenceIndex: -1, tokenIndex });
+        return tokenEl;
+      });
+
+      host.replaceChildren(...elements);
+      allTokenInfos.unshift(...infos);
+      if (
+        infos[0] &&
+        !(document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('token'))
+      ) {
+        setRoving(infos[0].element);
+      }
+    } catch {
+      // Keep the plain title when the tokenizer is unavailable.
+    }
   }
 
   function updatePopoverAddState(word: Word | undefined): void {
@@ -678,16 +766,29 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
 
   function positionPopover(info: TokenInfo): void {
     const rect = info.element.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const viewLeft = viewport?.offsetLeft ?? 0;
+    const viewTop = viewport?.offsetTop ?? 0;
+    const viewWidth = viewport?.width ?? window.innerWidth;
+    const viewHeight = viewport?.height ?? window.innerHeight;
+    const margin = 10;
+    const maxWidth = Math.max(180, viewWidth - margin * 2);
+    popover.style.width = `${Math.min(380, maxWidth)}px`;
+    popover.style.maxWidth = `${maxWidth}px`;
+    popover.style.maxHeight = `${Math.max(96, Math.min(560, viewHeight - margin * 2))}px`;
+
     const width = popover.offsetWidth;
     const height = popover.offsetHeight;
-    const margin = 10;
     let left = rect.left + rect.width / 2 - width / 2;
-    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    left = Math.max(viewLeft + margin, Math.min(left, viewLeft + viewWidth - width - margin));
+
+    const bottomLimit = viewTop + viewHeight - margin;
     let top = rect.bottom + 8;
-    if (top + height > window.innerHeight - margin) {
+    if (top + height > bottomLimit) {
       const above = rect.top - height - 8;
-      top = above >= margin ? above : Math.max(margin, window.innerHeight - height - margin);
+      top = above >= viewTop + margin ? above : Math.max(viewTop + margin, bottomLimit - height);
     }
+
     popover.style.left = `${Math.round(left)}px`;
     popover.style.top = `${Math.round(top)}px`;
   }
@@ -712,7 +813,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     const phrase = phraseFor(info.sentence, info.tokenIndex);
     const gloss = info.token.gloss || 'No gloss available';
     const meta = el('div', { className: 'popover-meta' }, [
-      el('span', { className: 'badge badge-outline', text: info.token.jlpt ? `N${info.token.jlpt}` : 'JLPT —' }),
+      el('span', { className: 'badge badge-outline', text: levelTagLabel(info.token.jlpt) }),
       el('span', { className: `badge ${tracked ? (tracked.state === 'known' ? 'badge-moss' : tracked.state === 'suspended' ? '' : 'badge-accent') : 'badge-outline'} popover-state`, text: tracked ? (tracked.state === 'known' ? 'Known' : tracked.state === 'suspended' ? 'Suspended' : 'Learning') : 'Not tracked' }),
       tracked?.firstStoryPending ? el('span', { className: 'badge badge-gold', text: 'Next story' }) : null,
       tracked?.aboveLevel ? el('span', { className: 'badge badge-gold', text: 'Above level' }) : null,
@@ -739,7 +840,12 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
       el('div', { className: 'popover-head' }, [
         el('div', { className: 'popover-surface' }, [
           el('strong', { text: info.token.surface }),
-          el('span', { className: 'popover-reading', text: info.token.reading || '—' }),
+          el('span', {
+            className: 'popover-reading',
+            title: readingLabel,
+            'aria-label': `${readingLabel}: ${info.token.reading || '—'}`,
+            text: info.token.reading || '—',
+          }),
         ]),
         el('button', {
           type: 'button',
@@ -814,7 +920,8 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     closePopover(false);
   }
 
-  storyText.addEventListener('pointerover', (event) => {
+  main.addEventListener('pointerover', (event) => {
+    if (mode === 'click') return;
     const pointer = event as PointerEvent;
     if (pointer.pointerType && pointer.pointerType !== 'mouse') return;
     const target = (event.target as HTMLElement).closest<HTMLElement>('.token');
@@ -829,7 +936,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     hoverTimer = window.setTimeout(() => openPopover(info, false), 120);
   });
 
-  storyText.addEventListener('pointerout', (event) => {
+  main.addEventListener('pointerout', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('.token');
     if (!target) return;
     if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return;
@@ -839,7 +946,7 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     closeTimer = window.setTimeout(() => closePopover(false), 240);
   });
 
-  storyText.addEventListener('click', (event) => {
+  main.addEventListener('click', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('.token');
     if (!target) return;
     const info = allTokenInfos.find((item) => item.element === target);
@@ -1020,11 +1127,16 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
   }
 
   window.addEventListener('scroll', onScroll, { passive: true });
+  const repositionPopover = () => {
+    if (!popover.hidden && currentInfo) positionPopover(currentInfo);
+  };
   const onResize = () => {
-    if (!popover.hidden) closePopover(false);
+    repositionPopover();
     closeTextSizePopover(false);
   };
   window.addEventListener('resize', onResize);
+  window.visualViewport?.addEventListener('resize', repositionPopover);
+  window.visualViewport?.addEventListener('scroll', repositionPopover);
 
   async function finish(): Promise<void> {
     story.readState = 'finished';
@@ -1050,6 +1162,8 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     closedByRoute = true;
     window.removeEventListener('scroll', onScroll);
     window.removeEventListener('resize', onResize);
+    window.visualViewport?.removeEventListener('resize', repositionPopover);
+    window.visualViewport?.removeEventListener('scroll', repositionPopover);
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('pointerdown', closeOnOutside);
     document.removeEventListener('pointerdown', closeTextSizeOnOutside);

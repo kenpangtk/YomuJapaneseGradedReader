@@ -2,6 +2,8 @@ import type { AppContext } from '../app';
 import { db, getFeedback, getStory, listWords } from '../db';
 import { computeAdaptation } from '../lib/adaptation';
 import { tokenMatchesWord } from '../lib/coverage';
+import { levelSummary } from '../lib/level';
+import { readingFieldLabel } from '../lib/languageDefaults';
 import { applyPassiveExposure, applyRecall } from '../lib/srs';
 import type { Difficulty, Feedback, ReaderSentence, RecallResponse, Story, Word } from '../types';
 import { button, el } from '../ui/dom';
@@ -63,7 +65,7 @@ function summaryView(
       el('div', { className: 'feedback-summary', style: { marginTop: '1.2rem' } }, [
         el('div', { className: 'field-label', text: 'What changed' }),
         el('strong', { text: feedback.adaptationSummary }),
-        el('p', { className: 'small muted', style: { margin: '0.5rem 0 0' }, text: `Level ${feedback.levelBefore.toFixed(2)} → ${feedback.levelAfter.toFixed(2)}` }),
+        el('p', { className: 'small muted', style: { margin: '0.5rem 0 0' }, text: `${levelSummary(feedback.levelBefore, story.language)} (${feedback.levelBefore.toFixed(2)}) → ${levelSummary(feedback.levelAfter, story.language)} (${feedback.levelAfter.toFixed(2)})` }),
       ]),
       feedback.skipped
         ? el('div', { className: 'notice notice-warn', style: { marginTop: '1rem' } }, [
@@ -123,7 +125,7 @@ export async function renderFeedback(root: HTMLElement, context: AppContext, sto
     return;
   }
 
-  const allWords = await listWords();
+  const allWords = await listWords(story.language);
   const candidates = appearedCandidates(story, allWords);
   const responses = new Map<string, RecallResponse>();
   let comprehension: number | null = null;
@@ -149,15 +151,37 @@ export async function renderFeedback(root: HTMLElement, context: AppContext, sto
       charCount: story.charCount,
       wordChecks: skipped ? [] : answered.map((item) => item.response),
     };
-    const adaptation = computeAdaptation(context.profile, signals, skipped);
-    const nextProfile = {
-      ...context.profile,
+    const adaptation = computeAdaptation(context.profile, signals, skipped, story.language);
+    const activeLanguage = story.language === context.profile.language;
+    const levelBefore = activeLanguage
+      ? context.profile.level
+      : context.profile.savedLevels[story.language]?.level ?? context.profile.level;
+    const languageState = {
       level: adaptation.level,
       hardness: adaptation.hardness,
       newWordCap: adaptation.newWordCap,
       consecutiveHard: adaptation.consecutiveHard,
       consecutiveEasy: adaptation.consecutiveEasy,
+      furiganaMode: activeLanguage
+        ? context.profile.furiganaMode
+        : context.profile.savedLevels[story.language]?.furiganaMode ?? context.profile.furiganaMode,
+    };
+    const nextProfile = {
+      ...context.profile,
+      ...(activeLanguage
+        ? {
+            level: adaptation.level,
+            hardness: adaptation.hardness,
+            newWordCap: adaptation.newWordCap,
+            consecutiveHard: adaptation.consecutiveHard,
+            consecutiveEasy: adaptation.consecutiveEasy,
+          }
+        : {}),
       storyLength: adaptation.storyLength,
+      savedLevels: {
+        ...context.profile.savedLevels,
+        [story.language]: languageState,
+      },
       updatedAt: now,
     };
     const appeared = new Set<string>();
@@ -188,7 +212,7 @@ export async function renderFeedback(root: HTMLElement, context: AppContext, sto
       translationReveals: story.translationReveals,
       createdAt: now,
       adaptationSummary: adaptation.summary,
-      levelBefore: context.profile.level,
+      levelBefore,
       levelAfter: adaptation.level,
     };
     try {
@@ -245,7 +269,12 @@ export async function renderFeedback(root: HTMLElement, context: AppContext, sto
     return el('div', { className: 'word-check' }, [
       el('div', { className: 'word-check-word' }, [
         el('strong', { text: candidate.word.dictionary }),
-        el('span', { className: 'muted small', text: candidate.word.reading }),
+        el('span', {
+          className: 'muted small',
+          title: readingFieldLabel(story.language),
+          'aria-label': `${readingFieldLabel(story.language)}: ${candidate.word.reading}`,
+          text: candidate.word.reading,
+        }),
         candidate.word.aboveLevel ? el('span', { className: 'badge badge-gold', text: 'Above level' }) : null,
       ]),
       el('div', { className: 'word-check-sentence', text: candidate.sentence.text }),

@@ -1,8 +1,8 @@
-# Yomu — Adaptive Japanese Graded Reader
+# Yomu — Adaptive Graded Reader
 
-A local-first, browser-only MVP for graded Japanese reading. Yomu generates short stories at the learner's current level, renders them with furigana and instant word/phrase glosses, tracks vocabulary, and adapts the next story from short end-of-story feedback.
+A local-first, browser-only MVP for graded Japanese and Mandarin Chinese reading. Yomu generates short stories at the learner's current JLPT or HSK level, renders them with furigana or pinyin and instant word/phrase glosses, tracks vocabulary separately per language, and adapts the next story from short end-of-story feedback.
 
-There is no backend, no account, and no telemetry. Learner data lives in IndexedDB. Story generation uses an OpenAI-compatible chat-completions endpoint supplied by the learner (BYOK); the default **offline mock provider** makes the entire loop work without a key.
+There is no backend, no account, and no telemetry. Learner data lives in IndexedDB. Story generation uses an OpenAI-compatible chat-completions endpoint supplied by the learner (BYOK), with an optional shared LAN default for local testing; the default **offline mock provider** makes the entire loop work without a key.
 
 ## Quick start
 
@@ -12,6 +12,10 @@ npm run dev
 ```
 
 Open the URL printed by Vite (normally `http://localhost:5173`). Do **not** open `index.html` through `file://`; the tokenizer dictionary is fetched over HTTP.
+
+## Open it on a phone (same Wi-Fi)
+
+The dev and preview servers bind to all interfaces. Start `npm run dev`, then open the `Network:` URL that Vite prints (for example `http://192.168.1.23:5173/`) on a phone on the same non-guest Wi-Fi. Allow incoming connections for Node if macOS prompts. Each browser has its own IndexedDB and saved provider key; use Settings → Export/Import to move learner data between devices.
 
 Production static build:
 
@@ -55,14 +59,29 @@ The API key is:
 
 Browser-held keys are visible to any script on the same origin. Use a scoped key. Public distribution requires revisiting key handling, CSP, content policy, and rate limits (see PRD §16–§17).
 
+## Shared LAN provider defaults
+
+For local testing, set `VITE_SHARED_PROVIDER=1` in `.env` and map the provider values into Vite-exposed variables:
+
+```bash
+VITE_SHARED_PROVIDER=1
+VITE_SHARED_API_KEY=$API_KEY
+VITE_SHARED_API_URL=$API_URL
+VITE_SHARED_API_MODEL=$API_MODEL
+```
+
+Vite injects those values into the client, so any browser that loads the app uses the same provider without entering a key. A browser without a saved key adopts the shared provider on its next load; a browser with a saved key keeps its own configuration.
+
+This exposes the key to anyone who can load the page. Use it only on a trusted network, prefer a scoped key with a spending limit, and do not enable it for public deployments. A production build with `VITE_SHARED_PROVIDER=1` embeds the key in `dist/`.
+
 ## Implemented MVP
 
 - Three-step onboarding: self-selected level, furigana default, interests, story length, content notice, first story.
 - Home/library with level card, due words, topic/length controls, recent stories, compact stats.
 - Reader:
   - paragraph layout, 42em reading column, adjustable text size from Settings and the reader toolbar, high-contrast and reduced-motion support;
-  - `Off` / `Always` / `On hover/tap` / `Learn-only` furigana with okurigana-aware ruby;
-  - token popovers with reading, dictionary form, POS, contextual gloss, JLPT, tracked state, phrase translation, full sentence translation, report action, and Add/Added;
+  - `Off` / `Always` / `On hover/tap` / `Learn-only` furigana with okurigana-aware ruby, including the story title;
+  - token popovers with reading, dictionary form, POS, contextual gloss, JLPT, tracked state, phrase translation, full sentence translation, report action, and Add/Added, including title words;
   - add-to-word-list with duplicate prevention, Undo toast, and no reading-position movement;
   - roving-tabindex keyboard navigation (`F`, `T`, arrow keys, `Enter`, `A`, `Esc`), touch lookup, pinned popovers, viewport clamping;
   - autosaved progress, resume/start-over banner, estimated time, progress bar, finish action, regenerate/report.
@@ -71,7 +90,7 @@ Browser-held keys are visible to any script on the same origin. Use a scoped key
   - compact JSON gloss contract, automatic JSON repair, client re-tokenization, and offset/phrase/text alignment;
   - validation for length, coverage, new-word cap, review-word occurrences, kanji level, language, repetition, and schema;
   - soft near-miss warnings for length/coverage/kanji so a usable provider story is not discarded for a small miss;
-  - targeted repair attempts, level drop retry, and bundled fallback with exact diagnostics;
+  - targeted edit-based repair attempts that patch only failing sentences, level drop retry, and bundled fallback with exact diagnostics;
   - saved generation metadata and diagnostics logs without keys.
 - Feedback:
   - comprehension, difficulty, optional interest, and up to six tracked words that actually appeared;
@@ -121,7 +140,7 @@ src/
     levelLists.ts        level bands, samples, kanji heuristics, interests
   generation/
     contract.ts          JSON contract types, parsing, shape validation
-    prompt.ts            system/user/repair prompts
+    prompt.ts            system/user/edit prompts
     openai.ts            streaming OpenAI-compatible adapter
     mock.ts              deterministic offline provider
     offline.ts           fallback/mock contract construction
@@ -164,7 +183,7 @@ The app makes no network requests except same-origin static assets and the provi
 - Fallback stories are tokenized lazily and cached in the saved story rather than shipping build-time token JSON.
 - The generation contract was compacted to a content-word gloss list because models were unreliable at emitting full token offsets; the client tokenizer remains authoritative and repairs/normalizes the contract.
 - Near-miss length (70–130% of the preferred range) and coverage (93–95%) are accepted with warnings rather than triggering fallback. The kanji whitelist is advisory because the bundled kanji list is intentionally compact and every token still gets furigana. Selected review words are advisory when the provider cannot fit them naturally; they remain due.
-- `.env` is ignored by git and is not read by the client bundle. Provider keys are entered in Settings and stored only in localStorage; local `.env` files are for automated testing only.
+- `.env` is ignored by git. It powers automated testing and, when `VITE_SHARED_PROVIDER=1`, the optional shared LAN provider defaults described above; in that mode Vite injects the key into the client bundle. Without the flag, `.env` is not read by the client.
 - BudouX is not included; the reader uses native Japanese line breaking (`line-break: strict`).
 - There is no audio/TTS, accounts, cloud sync, individual story deletion, or user-authored story import.
 - OpenAI-compatible streaming is implemented; provider-specific APIs outside chat completions are not.
@@ -172,4 +191,4 @@ The app makes no network requests except same-origin static assets and the provi
 
 ## No secrets
 
-No API keys or provider credentials are committed. The settings UI stores the key only in the learner's browser after entry. `.gitignore` excludes build output and generated kuromoji assets.
+No API keys or provider credentials are committed. `.gitignore` excludes `.env`, build output, and generated kuromoji assets. The default build stores provider keys only in each browser. When `VITE_SHARED_PROVIDER=1` is explicitly enabled, the key is injected into the client for LAN testing and is visible to every client that loads the app; do not use that mode for public hosting. Data exports never include the key.

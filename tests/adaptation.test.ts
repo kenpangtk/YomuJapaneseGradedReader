@@ -5,6 +5,7 @@ import type { Profile } from '../src/types';
 function profile(overrides: Partial<Profile> = {}): Profile {
   return {
     id: 'profile',
+    language: 'ja',
     level: 2,
     levelLocked: false,
     furiganaMode: 'always',
@@ -17,6 +18,10 @@ function profile(overrides: Partial<Profile> = {}): Profile {
     newWordCap: 5,
     consecutiveHard: 0,
     consecutiveEasy: 0,
+    savedLevels: {
+      ja: { level: 2, hardness: 0, newWordCap: 5, consecutiveHard: 0, consecutiveEasy: 0, furiganaMode: 'always' },
+      zh: { level: 1, hardness: 0, newWordCap: 3, consecutiveHard: 0, consecutiveEasy: 0, furiganaMode: 'always' },
+    },
     createdAt: 0,
     updatedAt: 0,
     ...overrides,

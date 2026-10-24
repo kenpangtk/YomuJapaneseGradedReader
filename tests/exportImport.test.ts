@@ -14,6 +14,7 @@ import type {
 function profile(overrides: Partial<Profile> = {}): Profile {
   return {
     id: 'profile',
+    language: 'ja',
     level: 2,
     levelLocked: false,
     furiganaMode: 'always',
@@ -26,6 +27,10 @@ function profile(overrides: Partial<Profile> = {}): Profile {
     newWordCap: 5,
     consecutiveHard: 0,
     consecutiveEasy: 0,
+    savedLevels: {
+      ja: { level: 2, hardness: 0, newWordCap: 5, consecutiveHard: 0, consecutiveEasy: 0, furiganaMode: 'always' },
+      zh: { level: 1, hardness: 0, newWordCap: 3, consecutiveHard: 0, consecutiveEasy: 0, furiganaMode: 'always' },
+    },
     createdAt: 100,
     updatedAt: 100,
     ...overrides,
@@ -50,6 +55,7 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
 function word(overrides: Partial<Word> = {}): Word {
   return {
     id: '公園::こうえん',
+    language: 'ja',
     dictionary: '公園',
     reading: 'こうえん',
     surfaceForms: ['公園'],
@@ -78,6 +84,7 @@ function word(overrides: Partial<Word> = {}): Word {
 function story(overrides: Partial<Story> = {}): Story {
   return {
     id: 'story-1',
+    language: 'ja',
     createdAt: 100,
     level: 2,
     levelAtGeneration: 2,
