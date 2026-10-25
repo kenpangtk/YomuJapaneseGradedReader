@@ -468,7 +468,19 @@ export async function renderReader(root: HTMLElement, context: AppContext, story
     titleHost.classList.add(`furigana-${mode}`);
     furiganaButton.replaceChildren(
       el('span', { text: 'F · ' }),
-      el('span', { className: 'reader-tool-label', text: mode === 'off' ? 'Off' : mode === 'always' ? 'Always' : mode === 'hover' ? 'Hover' : 'Learn' }),
+      el('span', {
+        className: 'reader-tool-label',
+        text:
+          mode === 'off'
+            ? 'Off'
+            : mode === 'always'
+              ? 'Always'
+              : mode === 'hover'
+                ? 'Hover'
+                : mode === 'click'
+                  ? 'Click'
+                  : 'Learn',
+      }),
     );
     furiganaButton.setAttribute('aria-label', `${pronunciation}: ${FURIGANA_LABELS[mode]}. Press F to cycle.`);
     furiganaButton.title = `${pronunciation}: ${FURIGANA_LABELS[mode]} (F)`;
